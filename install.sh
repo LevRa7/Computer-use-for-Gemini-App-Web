@@ -59,7 +59,13 @@ detect_device() {
     DETECTED_HOSTNAME=$(hostname -s 2>/dev/null || hostname)
     DETECTED_ARCH=$(uname -m)
 
-    if [ -f /etc/os-release ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
+        DETECTED_OS="macOS $(sw_vers -productVersion 2>/dev/null || '')"
+        DETECTED_TYPE="Apple Mac"
+        if sysctl -n hw.model 2>/dev/null | grep -qi "book"; then
+            DETECTED_TYPE="Apple MacBook (Laptop)"
+        fi
+    elif [ -f /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
         DETECTED_OS="${PRETTY_NAME:-$NAME}"
@@ -67,15 +73,17 @@ detect_device() {
         DETECTED_OS=$(uname -s)
     fi
 
-    DETECTED_TYPE="Десктоп / Сервер (Desktop/Server)"
-    if [ -d /sys/class/power_supply ] && ls /sys/class/power_supply/BAT* 1>/dev/null 2>&1; then
-        DETECTED_TYPE="Ноутбук (Laptop)"
-    elif grep -q -i "microsoft" /proc/version 2>/dev/null; then
-        DETECTED_TYPE="WSL (Windows Subsystem for Linux)"
-    elif [ -f /.dockerenv ] || grep -q "docker\|containerd" /proc/1/cgroup 2>/dev/null; then
-        DETECTED_TYPE="Контейнер (Docker/LXC)"
-    elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
-        DETECTED_TYPE="Облачный сервер / VPS ($(systemd-detect-virt))"
+    if [ "$(uname -s)" != "Darwin" ]; then
+        DETECTED_TYPE="Десктоп / Сервер (Desktop/Server)"
+        if [ -d /sys/class/power_supply ] && ls /sys/class/power_supply/BAT* 1>/dev/null 2>&1; then
+            DETECTED_TYPE="Ноутбук (Laptop)"
+        elif grep -q -i "microsoft" /proc/version 2>/dev/null; then
+            DETECTED_TYPE="WSL (Windows Subsystem for Linux)"
+        elif [ -f /.dockerenv ] || grep -q "docker\|containerd" /proc/1/cgroup 2>/dev/null; then
+            DETECTED_TYPE="Контейнер (Docker/LXC)"
+        elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
+            DETECTED_TYPE="Облачный сервер / VPS ($(systemd-detect-virt))"
+        fi
     fi
 }
 
@@ -173,20 +181,14 @@ fi
 if [ -n "$SSH_TARGET" ]; then
     echo -e "${BOLD}${BLUE}=== Удаленная установка Antigravity Mesh через SSH ===${RESET}"
     echo -e "Целевой сервер: ${CYAN}${SSH_TARGET}${RESET} (порт: ${SSH_PORT})"
-    SSH_BIN="ssh -o StrictHostKeyChecking=no"
-    SCP_BIN="scp -o StrictHostKeyChecking=no"
-    if [ -n "$SSHPASS" ] && command -v sshpass >/dev/null 2>&1; then
-        SSH_BIN="sshpass -e $SSH_BIN"
-        SCP_BIN="sshpass -e $SCP_BIN"
-    fi
-    $SSH_BIN -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p ~/antigravity-mesh/core ~/antigravity-mesh/skills"
-    $SCP_BIN -P "$SSH_PORT" -r "$SCRIPT_DIR/core"/* "$SSH_TARGET:~/antigravity-mesh/core/"
-    $SCP_BIN -P "$SSH_PORT" "$SCRIPT_DIR/install.sh" "$SSH_TARGET:~/antigravity-mesh/"
+    ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_TARGET" "mkdir -p ~/antigravity-mesh/core ~/antigravity-mesh/skills"
+    scp -P "$SSH_PORT" -o StrictHostKeyChecking=no -r "$SCRIPT_DIR/core"/* "$SSH_TARGET:~/antigravity-mesh/core/"
+    scp -P "$SSH_PORT" -o StrictHostKeyChecking=no "$SCRIPT_DIR/install.sh" "$SSH_TARGET:~/antigravity-mesh/"
     if [ -d "$SCRIPT_DIR/skills" ]; then
-        $SCP_BIN -P "$SSH_PORT" -r "$SCRIPT_DIR/skills"/* "$SSH_TARGET:~/antigravity-mesh/skills/" 2>/dev/null || true
+        scp -P "$SSH_PORT" -o StrictHostKeyChecking=no -r "$SCRIPT_DIR/skills"/* "$SSH_TARGET:~/antigravity-mesh/skills/" 2>/dev/null || true
     fi
     echo -e "${GREEN}[✓] Файлы скопированы. Запуск установки на удаленном сервере...${RESET}"
-    $SSH_BIN -p "$SSH_PORT" "$SSH_TARGET" "cd ~/antigravity-mesh && bash install.sh --quick"
+    ssh -t -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_TARGET" "cd ~/antigravity-mesh && bash install.sh --quick"
     exit 0
 fi
 
@@ -393,9 +395,47 @@ EOF
 chmod 600 "$CONFIG_FILE"
 
 echo "[4/4] Настройка и запуск службы автозапуска на ПК..."
-USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
-mkdir -p "$USER_SYSTEMD_DIR"
-cat << EOF > "$USER_SYSTEMD_DIR/agy-agent.service"
+if [ "$(uname -s)" = "Darwin" ]; then
+    LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+    mkdir -p "$LAUNCH_AGENTS"
+    PLIST_FILE="$LAUNCH_AGENTS/com.antigravity.mesh.agent.plist"
+    cat << EOF > "$PLIST_FILE"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.antigravity.mesh.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which python3)</string>
+        <string>-m</string>
+        <string>core.agent</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$SCRIPT_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MESH_GATEWAY</key>
+        <string>$GATEWAY</string>
+        <key>MESH_USER</key>
+        <string>$ASSIGNED_USER</string>
+        <key>MESH_TOKEN</key>
+        <string>$ASSIGNED_TOKEN</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+    launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    launchctl load -w "$PLIST_FILE" 2>/dev/null || true
+else
+    USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$USER_SYSTEMD_DIR"
+    cat << EOF > "$USER_SYSTEMD_DIR/agy-agent.service"
 [Unit]
 Description=Antigravity Mesh Reverse RPC Agent
 After=network.target
@@ -412,13 +452,14 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
-systemctl --user daemon-reload 2>/dev/null || true
-systemctl --user enable --now agy-agent.service 2>/dev/null || {
-    echo "Запуск агента в фоне (сессия без systemd user manager)..."
-    pkill -f "core.agent" 2>/dev/null || true
-    nohup /usr/bin/python3 -m core.agent > "$CONFIG_DIR/agent.log" 2>&1 &
-}
-loginctl enable-linger "$USER" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable --now agy-agent.service 2>/dev/null || {
+        echo "Запуск агента в фоне (сессия без systemd user manager)..."
+        pkill -f "core.agent" 2>/dev/null || true
+        nohup /usr/bin/python3 -m core.agent > "$CONFIG_DIR/agent.log" 2>&1 &
+    }
+    loginctl enable-linger "$USER" 2>/dev/null || true
+fi
 
 sleep 1
 
