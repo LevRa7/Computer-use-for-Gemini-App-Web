@@ -18,7 +18,20 @@ QUICK=false
 SSH_TARGET=""
 SSH_PORT="22"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+[ -z "$SCRIPT_DIR" ] && SCRIPT_DIR="."
+
+# If executed via pipe (curl | bash) or outside repository, bootstrap core files
+if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
+    BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
+    mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
+    curl -fsSL "https://${GATEWAY}/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/__init__.py" -o "$BOOTSTRAP_DIR/core/__init__.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/skills/orchestrator.md" -o "$BOOTSTRAP_DIR/skills/orchestrator.md" 2>/dev/null || true
+    SCRIPT_DIR="$BOOTSTRAP_DIR"
+fi
 CONFIG_DIR="$HOME/.config/antigravity-mesh"
 CONFIG_FILE="$CONFIG_DIR/agent.env"
 
