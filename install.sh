@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  Antigravity Mesh - Universal Turnkey Installer (v1.1.0)
-#  Automated Device Detection, Standalone/Cloud MCP, Auto-Subdomain, SSH & Autostart
+#  Antigravity Mesh - Universal Turnkey Installer (v1.2.0)
+#  Bilingual: English (Default) & Russian, Device Detection, SSH & Autostart
 # ==============================================================================
 set -e
 
@@ -17,11 +17,13 @@ DRY_RUN=false
 QUICK=false
 SSH_TARGET=""
 SSH_PORT="22"
+LANG_CHOICE=""
+EXPLICIT_LANG=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 [ -z "$SCRIPT_DIR" ] && SCRIPT_DIR="."
 
-# If executed via pipe (curl | bash) or outside repository, bootstrap core files
+# Bootstrap if piped from curl or run outside project
 if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
     mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
@@ -32,10 +34,11 @@ if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     curl -fsSL "https://${GATEWAY}/skills/orchestrator.md" -o "$BOOTSTRAP_DIR/skills/orchestrator.md" 2>/dev/null || true
     SCRIPT_DIR="$BOOTSTRAP_DIR"
 fi
+
 CONFIG_DIR="$HOME/.config/antigravity-mesh"
 CONFIG_FILE="$CONFIG_DIR/agent.env"
 
-# Colors for terminal
+# Colors
 BOLD="\033[1m"
 GREEN="\033[0;32m"
 CYAN="\033[0;36m"
@@ -44,75 +47,14 @@ BLUE="\033[0;34m"
 MAGENTA="\033[0;35m"
 RESET="\033[0m"
 
-show_help() {
-    cat << EOF
-Antigravity Mesh Installer
-
-Usage: $0 [OPTIONS]
-
-Options:
-  -q, --quick                 Быстрая автоустановка (детекция устройства + субдомен ПК + автозапуск)
-  --mode=[tunnel|standalone|gateway]  Режим развертывания:
-                                tunnel:     Облачный шлюз с субдоменом и туннелем (по умолчанию)
-                                standalone: Локальный FastMCP сервер (localhost, без субдомена)
-                                gateway:    Развертывание мастер-шлюза
-  --user=<username>           Имя субдомена (<username>.smart-server.online)
-  --token=<token>             Крипто-токен авторизации (генерируется автоматически)
-  --gateway=<host>            Хост шлюза (по умолчанию: smart-server.online)
-  --port=<port>               Порт для режима Standalone (по умолчанию: 8096)
-  --ssh=<user@host[:port]>    Удаленная установка на другой сервер через SSH
-  --tls=[none|self-signed]    TLS шифрование для standalone
-  --domain=<domain>           Домен для gateway режима
-  --dry-run                   Тестовый запуск без внесения изменений в систему
-  -h, --help                  Показать эту справку
-EOF
-}
-
-detect_device() {
-    DETECTED_HOSTNAME=$(hostname -s 2>/dev/null || hostname)
-    DETECTED_ARCH=$(uname -m)
-
-    if [ "$(uname -s)" = "Darwin" ]; then
-        DETECTED_OS="macOS $(sw_vers -productVersion 2>/dev/null || '')"
-        DETECTED_TYPE="Apple Mac"
-        if sysctl -n hw.model 2>/dev/null | grep -qi "book"; then
-            DETECTED_TYPE="Apple MacBook (Laptop)"
-        fi
-    elif [ -f /etc/os-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        DETECTED_OS="${PRETTY_NAME:-$NAME}"
-    else
-        DETECTED_OS=$(uname -s)
-    fi
-
-    if [ "$(uname -s)" != "Darwin" ]; then
-        DETECTED_TYPE="Десктоп / Сервер (Desktop/Server)"
-        if [ -d /sys/class/power_supply ] && ls /sys/class/power_supply/BAT* 1>/dev/null 2>&1; then
-            DETECTED_TYPE="Ноутбук (Laptop)"
-        elif grep -q -i "microsoft" /proc/version 2>/dev/null; then
-            DETECTED_TYPE="WSL (Windows Subsystem for Linux)"
-        elif [ -f /.dockerenv ] || grep -q "docker\|containerd" /proc/1/cgroup 2>/dev/null; then
-            DETECTED_TYPE="Контейнер (Docker/LXC)"
-        elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
-            DETECTED_TYPE="Облачный сервер / VPS ($(systemd-detect-virt))"
-        fi
-    fi
-}
-
-print_device_info() {
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${CYAN}║${RESET} ${BOLD}🔍 Обнаружено устройство:${RESET}"
-    echo -e "${CYAN}║${RESET}   • Имя хоста   : ${GREEN}${DETECTED_HOSTNAME}${RESET}"
-    echo -e "${CYAN}║${RESET}   • Тип         : ${YELLOW}${DETECTED_TYPE}${RESET}"
-    echo -e "${CYAN}║${RESET}   • ОС          : ${DETECTED_OS}"
-    echo -e "${CYAN}║${RESET}   • Архитектура : ${DETECTED_ARCH}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
-}
-
-# Parse command line args
+# Parse CLI args
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --lang=*)
+            LANG_CHOICE="${1#*=}"
+            EXPLICIT_LANG=true
+            shift
+            ;;
         -q|--quick)
             QUICK=true
             shift
@@ -160,66 +102,170 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            show_help
+            echo "Usage: $0 [--lang=en|ru] [-q|--quick] [--mode=tunnel|standalone|gateway] [--user=<subdomain>] [--token=<token>] [--port=<port>] [--ssh=user@host] [--dry-run]"
             exit 0
             ;;
         *)
-            echo -e "${YELLOW}[ERROR] Неизвестный параметр: $1${RESET}"
-            show_help
+            echo -e "${YELLOW}[ERROR] Unknown parameter: $1${RESET}"
             exit 1
             ;;
     esac
 done
 
+# Language prompt if interactive and not specified
+if [ -z "$LANG_CHOICE" ]; then
+    if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
+        echo -e "\n${BOLD}${CYAN}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${BOLD}${CYAN}║              🌐 LANGUAGE SELECTION / ВЫБОР ЯЗЫКА                       ║${RESET}"
+        echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+        echo -e "  ${GREEN}1)${RESET} English (Default)"
+        echo -e "  ${BLUE}2)${RESET} Русский"
+        read -rp "Select / Выберите [1]: " LANG_INPUT
+        if [ "$LANG_INPUT" = "2" ] || [ "$LANG_INPUT" = "ru" ] || [ "$LANG_INPUT" = "RU" ]; then
+            LANG_CHOICE="ru"
+        else
+            LANG_CHOICE="en"
+        fi
+    else
+        LANG_CHOICE="en"
+    fi
+fi
+
+# Device detection
+detect_device() {
+    DETECTED_HOSTNAME=$(hostname -s 2>/dev/null || hostname)
+    DETECTED_ARCH=$(uname -m)
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        DETECTED_OS="macOS $(sw_vers -productVersion 2>/dev/null || '')"
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            DETECTED_TYPE="Apple Mac"
+            sysctl -n hw.model 2>/dev/null | grep -qi "book" && DETECTED_TYPE="Apple MacBook (Ноутбук)"
+        else
+            DETECTED_TYPE="Apple Mac"
+            sysctl -n hw.model 2>/dev/null | grep -qi "book" && DETECTED_TYPE="Apple MacBook (Laptop)"
+        fi
+    elif [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        DETECTED_OS="${PRETTY_NAME:-$NAME}"
+    else
+        DETECTED_OS=$(uname -s)
+    fi
+
+    if [ "$(uname -s)" != "Darwin" ]; then
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            DETECTED_TYPE="Десктоп / Сервер"
+            if [ -d /sys/class/power_supply ] && ls /sys/class/power_supply/BAT* 1>/dev/null 2>&1; then
+                DETECTED_TYPE="Ноутбук (Laptop)"
+            elif grep -q -i "microsoft" /proc/version 2>/dev/null; then
+                DETECTED_TYPE="WSL (Windows Subsystem for Linux)"
+            elif [ -f /.dockerenv ] || grep -q "docker\|containerd" /proc/1/cgroup 2>/dev/null; then
+                DETECTED_TYPE="Контейнер (Docker/LXC)"
+            elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
+                DETECTED_TYPE="Облачный сервер / VPS ($(systemd-detect-virt))"
+            fi
+        else
+            DETECTED_TYPE="Desktop / Server"
+            if [ -d /sys/class/power_supply ] && ls /sys/class/power_supply/BAT* 1>/dev/null 2>&1; then
+                DETECTED_TYPE="Laptop"
+            elif grep -q -i "microsoft" /proc/version 2>/dev/null; then
+                DETECTED_TYPE="WSL (Windows Subsystem for Linux)"
+            elif [ -f /.dockerenv ] || grep -q "docker\|containerd" /proc/1/cgroup 2>/dev/null; then
+                DETECTED_TYPE="Container (Docker/LXC)"
+            elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
+                DETECTED_TYPE="Cloud VPS ($(systemd-detect-virt))"
+            fi
+        fi
+    fi
+}
+
 detect_device
 
-# Dry-run handling
+print_device_info() {
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${CYAN}║${RESET} ${BOLD}🔍 Обнаружено устройство:${RESET}"
+        echo -e "${CYAN}║${RESET}   • Имя хоста   : ${GREEN}${DETECTED_HOSTNAME}${RESET}"
+        echo -e "${CYAN}║${RESET}   • Тип         : ${YELLOW}${DETECTED_TYPE}${RESET}"
+        echo -e "${CYAN}║${RESET}   • ОС          : ${DETECTED_OS}"
+        echo -e "${CYAN}║${RESET}   • Архитектура : ${DETECTED_ARCH}"
+        echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+    else
+        echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${CYAN}║${RESET} ${BOLD}🔍 Detected Device:${RESET}"
+        echo -e "${CYAN}║${RESET}   • Hostname    : ${GREEN}${DETECTED_HOSTNAME}${RESET}"
+        echo -e "${CYAN}║${RESET}   • Type        : ${YELLOW}${DETECTED_TYPE}${RESET}"
+        echo -e "${CYAN}║${RESET}   • OS          : ${DETECTED_OS}"
+        echo -e "${CYAN}║${RESET}   • Architecture: ${DETECTED_ARCH}"
+        echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+    fi
+}
+
+# Dry-run
 if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] Simulating Antigravity Mesh installation..."
+    echo "[DRY-RUN] Language: $LANG_CHOICE"
     echo "[DRY-RUN] Detected Host: $DETECTED_HOSTNAME ($DETECTED_TYPE)"
     echo "[DRY-RUN] Selected Mode: ${MODE:-standalone}"
     echo "[DRY-RUN] Port: $PORT"
     echo "[DRY-RUN] TLS: $TLS"
-    if [ -n "$DOMAIN" ]; then
-        echo "[DRY-RUN] Domain: $DOMAIN"
-    fi
-    if [ -n "$USERNAME" ]; then
-        echo "[DRY-RUN] User: $USERNAME"
-    fi
+    if [ -n "$DOMAIN" ]; then echo "[DRY-RUN] Domain: $DOMAIN"; fi
+    if [ -n "$USERNAME" ]; then echo "[DRY-RUN] User: $USERNAME"; fi
     echo "[DRY-RUN] Systemd service and dependencies check: OK"
     exit 0
 fi
 
 # SSH Remote install branch
 if [ -n "$SSH_TARGET" ]; then
-    echo -e "${BOLD}${BLUE}=== Удаленная установка Antigravity Mesh через SSH ===${RESET}"
-    echo -e "Целевой сервер: ${CYAN}${SSH_TARGET}${RESET} (порт: ${SSH_PORT})"
-    ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_TARGET" "mkdir -p ~/antigravity-mesh/core ~/antigravity-mesh/skills"
-    scp -P "$SSH_PORT" -o StrictHostKeyChecking=no -r "$SCRIPT_DIR/core"/* "$SSH_TARGET:~/antigravity-mesh/core/"
-    scp -P "$SSH_PORT" -o StrictHostKeyChecking=no "$SCRIPT_DIR/install.sh" "$SSH_TARGET:~/antigravity-mesh/"
-    if [ -d "$SCRIPT_DIR/skills" ]; then
-        scp -P "$SSH_PORT" -o StrictHostKeyChecking=no -r "$SCRIPT_DIR/skills"/* "$SSH_TARGET:~/antigravity-mesh/skills/" 2>/dev/null || true
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${BOLD}${BLUE}=== Удаленная установка Antigravity Mesh через SSH ===${RESET}"
+        echo -e "Целевой сервер: ${CYAN}${SSH_TARGET}${RESET} (порт: ${SSH_PORT})"
+    else
+        echo -e "${BOLD}${BLUE}=== Remote Antigravity Mesh SSH Installation ===${RESET}"
+        echo -e "Target Server: ${CYAN}${SSH_TARGET}${RESET} (port: ${SSH_PORT})"
     fi
-    echo -e "${GREEN}[✓] Файлы скопированы. Запуск установки на удаленном сервере...${RESET}"
-    ssh -t -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_TARGET" "cd ~/antigravity-mesh && bash install.sh --quick"
+
+    SSH_BIN="ssh -o StrictHostKeyChecking=no"
+    SCP_BIN="scp -o StrictHostKeyChecking=no"
+    if [ -n "$SSHPASS" ] && command -v sshpass >/dev/null 2>&1; then
+        SSH_BIN="sshpass -e $SSH_BIN"
+        SCP_BIN="sshpass -e $SCP_BIN"
+    fi
+
+    $SSH_BIN -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p ~/antigravity-mesh/core ~/antigravity-mesh/skills"
+    $SCP_BIN -P "$SSH_PORT" -r "$SCRIPT_DIR/core"/* "$SSH_TARGET:~/antigravity-mesh/core/"
+    $SCP_BIN -P "$SSH_PORT" "$SCRIPT_DIR/install.sh" "$SSH_TARGET:~/antigravity-mesh/"
+    if [ -d "$SCRIPT_DIR/skills" ]; then
+        $SCP_BIN -P "$SSH_PORT" -r "$SCRIPT_DIR/skills"/* "$SSH_TARGET:~/antigravity-mesh/skills/" 2>/dev/null || true
+    fi
+    $SSH_BIN -p "$SSH_PORT" "$SSH_TARGET" "cd ~/antigravity-mesh && bash install.sh --quick --lang=$LANG_CHOICE"
     exit 0
 fi
 
 # Interactive Menu if no mode is specified and not in quick mode
 if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
-    echo -e "\n${BOLD}${MAGENTA}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${MAGENTA}║               🚀 ANTIGRAVITY MESH - МАСТЕР УСТАНОВКИ                   ║${RESET}"
-    echo -e "${BOLD}${MAGENTA}╚════════════════════════════════════════════════════════════════════════╝${RESET}\n"
     print_device_info
     echo ""
-    echo -e "${BOLD}Выберите режим установки:${RESET}"
-    echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Быстрая настройка${RESET} (Субдомен как имя ПК + Облачный шлюз + Автозапуск) [Рекомендуется]"
-    echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Локальный Standalone${RESET} (Только localhost:${PORT}, без субдомена и шлюза)"
-    echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Кастомная настройка${RESET} (Ввести имя субдомена вручную, выбор шлюза)"
-    echo -e "  ${CYAN}4)${RESET} 📡 ${BOLD}Удаленная установка на SSH-сервер${RESET}"
-    echo -e "  ${RESET}0) Выход"
-    echo ""
-    read -rp "Ваш выбор [1]: " MENU_CHOICE
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${BOLD}Выберите режим установки:${RESET}"
+        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Быстрая настройка${RESET} (Субдомен как имя ПК + Облачный шлюз + Автозапуск) [Рекомендуется]"
+        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Локальный Standalone${RESET} (Только localhost:${PORT}, без субдомена и шлюза)"
+        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Кастомная настройка${RESET} (Ввести имя субдомена вручную, выбор шлюза)"
+        echo -e "  ${CYAN}4)${RESET} 📡 ${BOLD}Удаленная установка на SSH-сервер${RESET}"
+        echo -e "  ${RESET}0) Выход"
+        echo ""
+        read -rp "Ваш выбор [1]: " MENU_CHOICE
+    else
+        echo -e "${BOLD}Select Installation Mode:${RESET}"
+        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Quick Setup${RESET} (Auto-subdomain from PC name + Cloud Gateway + Autostart) [Recommended]"
+        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Local Standalone${RESET} (localhost:${PORT} only, no subdomain, no cloud gateway)"
+        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Custom Setup${RESET} (Custom subdomain name, custom gateway/port)"
+        echo -e "  ${CYAN}4)${RESET} 📡 ${BOLD}Remote SSH Installation${RESET}"
+        echo -e "  ${RESET}0) Exit"
+        echo ""
+        read -rp "Select [1]: " MENU_CHOICE
+    fi
     MENU_CHOICE=${MENU_CHOICE:-1}
 
     case "$MENU_CHOICE" in
@@ -233,35 +279,39 @@ if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
         3)
             MODE="tunnel"
             echo ""
-            read -rp "Введите имя субдомена [по умолчанию: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
-            if [ -n "$CUSTOM_SUB" ]; then
-                USERNAME="$CUSTOM_SUB"
+            if [ "$LANG_CHOICE" = "ru" ]; then
+                read -rp "Введите имя субдомена [по умолчанию: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
+                read -rp "Хост шлюза [по умолчанию: ${GATEWAY}]: " CUSTOM_GW
+            else
+                read -rp "Enter subdomain name [default: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
+                read -rp "Gateway host [default: ${GATEWAY}]: " CUSTOM_GW
             fi
-            read -rp "Хост шлюза [по умолчанию: ${GATEWAY}]: " CUSTOM_GW
-            if [ -n "$CUSTOM_GW" ]; then
-                GATEWAY="$CUSTOM_GW"
-            fi
+            if [ -n "$CUSTOM_SUB" ]; then USERNAME="$CUSTOM_SUB"; fi
+            if [ -n "$CUSTOM_GW" ]; then GATEWAY="$CUSTOM_GW"; fi
             ;;
         4)
             echo ""
-            read -rp "Введите SSH цель (например, user@192.168.1.50): " REMOTE_TARGET
-            read -rp "Порт SSH [22]: " REMOTE_PORT
+            if [ "$LANG_CHOICE" = "ru" ]; then
+                read -rp "Введите SSH цель (например, user@192.168.1.50): " REMOTE_TARGET
+                read -rp "Порт SSH [22]: " REMOTE_PORT
+            else
+                read -rp "Enter SSH target (e.g., user@192.168.1.50): " REMOTE_TARGET
+                read -rp "SSH Port [22]: " REMOTE_PORT
+            fi
             REMOTE_PORT=${REMOTE_PORT:-22}
-            exec "$0" "--ssh=${REMOTE_TARGET}:${REMOTE_PORT}"
+            exec "$0" "--ssh=${REMOTE_TARGET}:${REMOTE_PORT}" "--lang=${LANG_CHOICE}"
             ;;
         0)
-            echo "Отменено пользователем."
+            echo "Cancelled."
             exit 0
             ;;
         *)
-            echo "Некорректный выбор, используем быструю настройку."
             MODE="tunnel"
             QUICK=true
             ;;
     esac
 fi
 
-# If mode still empty, default to tunnel
 if [ -z "$MODE" ]; then
     MODE="tunnel"
 fi
@@ -269,19 +319,58 @@ fi
 print_device_info
 
 # ==============================================================================
-#  BRANCH: STANDALONE MODE (Localhost only, no subdomain, no gateway)
+#  BRANCH: STANDALONE MODE
 # ==============================================================================
 if [ "$MODE" = "standalone" ]; then
-    echo -e "\n${BOLD}${BLUE}=== Настройка локального Standalone FastMCP сервера ===${RESET}"
-    echo "[1/3] Проверка окружения Python..."
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "\n${BOLD}${BLUE}=== Настройка локального Standalone FastMCP сервера ===${RESET}"
+        echo "[1/3] Проверка окружения Python..."
+    else
+        echo -e "\n${BOLD}${BLUE}=== Setting up Local Standalone FastMCP Server ===${RESET}"
+        echo "[1/3] Checking Python environment..."
+    fi
     mkdir -p "$CONFIG_DIR"
 
-    echo "[2/3] Настройка systemd автозапуска на ПК..."
-    USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
-    mkdir -p "$USER_SYSTEMD_DIR"
-    SERVICE_FILE="$USER_SYSTEMD_DIR/agy-standalone.service"
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo "[2/3] Настройка systemd автозапуска на ПК..."
+    else
+        echo "[2/3] Configuring autostart background service..."
+    fi
 
-    cat << EOF > "$SERVICE_FILE"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+        mkdir -p "$LAUNCH_AGENTS"
+        PLIST_FILE="$LAUNCH_AGENTS/com.antigravity.mesh.standalone.plist"
+        cat << EOF > "$PLIST_FILE"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.antigravity.mesh.standalone</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which python3)</string>
+        <string>-m</string>
+        <string>core.server</string>
+        <string>--port=$PORT</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$SCRIPT_DIR</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+        launchctl unload "$PLIST_FILE" 2>/dev/null || true
+        launchctl load -w "$PLIST_FILE" 2>/dev/null || true
+    else
+        USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
+        mkdir -p "$USER_SYSTEMD_DIR"
+        SERVICE_FILE="$USER_SYSTEMD_DIR/agy-standalone.service"
+        cat << EOF > "$SERVICE_FILE"
 [Unit]
 Description=Antigravity Mesh Local Standalone MCP Server
 After=network.target
@@ -296,40 +385,60 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOF
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable --now agy-standalone.service 2>/dev/null || {
+            pkill -f "core.server" 2>/dev/null || true
+            nohup /usr/bin/python3 -m core.server --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
+        }
+        loginctl enable-linger "$USER" 2>/dev/null || true
+    fi
 
-    systemctl --user daemon-reload 2>/dev/null || true
-    systemctl --user enable --now agy-standalone.service 2>/dev/null || {
-        echo "Запуск в фоне (сессия без systemd user manager)..."
-        nohup /usr/bin/python3 -m core.server --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
-    }
-    loginctl enable-linger "$USER" 2>/dev/null || true
-
-    echo "[3/3] Проверка локального эндпоинта..."
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo "[3/3] Проверка локального эндпоинта..."
+    else
+        echo "[3/3] Verifying local endpoint..."
+    fi
     sleep 1
 
     MCP_LOCAL_URL="http://localhost:${PORT}/sse"
     echo ""
     echo -e "${GREEN}════════════════════════════════════════════════════════════════════════${RESET}"
-    echo -e "${BOLD}${GREEN}🎉 Локальный Standalone MCP-сервер успешно запущен на этом ПК!${RESET}"
-    echo ""
-    echo -e "  📍 ${BOLD}Адрес MCP-сервера:${RESET}  ${CYAN}${MCP_LOCAL_URL}${RESET}"
-    echo -e "  ⚙️  ${BOLD}Порт:${RESET}               ${PORT}"
-    echo -e "  🔄 ${BOLD}Автозапуск:${RESET}         Включен (systemd: agy-standalone.service)"
-    echo ""
-    echo -e "  ${BOLD}✨ Добавление в Gemini Spark / AI Studio:${RESET}"
-    echo -e "     1. Откройте интерфейс: ${CYAN}https://gemini.google.com/${RESET}"
-    echo -e "     2. Перейдите в настройки MCP-инструментов (Settings ➔ MCP / Extensions)"
-    echo -e "     3. Добавьте URL: ${BOLD}${MCP_LOCAL_URL}${RESET}"
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${BOLD}${GREEN}🎉 Локальный Standalone MCP-сервер успешно запущен на этом ПК!${RESET}"
+        echo ""
+        echo -e "  📍 ${BOLD}Адрес MCP-сервера:${RESET}  ${CYAN}${MCP_LOCAL_URL}${RESET}"
+        echo -e "  ⚙️  ${BOLD}Порт:${RESET}               ${PORT}"
+        echo -e "  🔄 ${BOLD}Автозапуск:${RESET}         Включен (фоновая служба)"
+        echo ""
+        echo -e "  ${BOLD}✨ Добавление в Gemini Spark / AI Studio:${RESET}"
+        echo -e "     1. Откройте интерфейс: ${CYAN}https://gemini.google.com/${RESET}"
+        echo -e "     2. Перейдите в настройки MCP-инструментов (Settings ➔ MCP / Extensions)"
+        echo -e "     3. Добавьте URL: ${BOLD}${MCP_LOCAL_URL}${RESET}"
+    else
+        echo -e "${BOLD}${GREEN}🎉 Local Standalone MCP Server successfully running on this machine!${RESET}"
+        echo ""
+        echo -e "  📍 ${BOLD}MCP Server Address:${RESET} ${CYAN}${MCP_LOCAL_URL}${RESET}"
+        echo -e "  ⚙️  ${BOLD}Port:${RESET}               ${PORT}"
+        echo -e "  🔄 ${BOLD}Autostart:${RESET}          Enabled (background service)"
+        echo ""
+        echo -e "  ${BOLD}✨ Connect to Google Gemini / Spark:${RESET}"
+        echo -e "     1. Open: ${CYAN}https://gemini.google.com/${RESET}"
+        echo -e "     2. Go to Settings ➔ Tools / Extensions (MCP)"
+        echo -e "     3. Add URL: ${BOLD}${MCP_LOCAL_URL}${RESET}"
+    fi
     echo -e "${GREEN}════════════════════════════════════════════════════════════════════════${RESET}"
     exit 0
 fi
 
 # ==============================================================================
-#  BRANCH: CLOUD GATEWAY + TUNNEL (Auto-subdomain as PC name, token, proxy)
+#  BRANCH: CLOUD GATEWAY + REVERSE TUNNEL
 # ==============================================================================
-echo -e "\n${BOLD}${MAGENTA}=== Настройка облачного туннеля и субдомена ===${RESET}"
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo -e "\n${BOLD}${MAGENTA}=== Настройка облачного туннеля и субдомена ===${RESET}"
+else
+    echo -e "\n${BOLD}${MAGENTA}=== Configuring Cloud Gateway Tunnel & Subdomain ===${RESET}"
+fi
 
-# Determine clean subdomain from PC name
 if [ -z "$USERNAME" ]; then
     CLEAN_HOST=$(echo "$DETECTED_HOSTNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
     USERNAME="$CLEAN_HOST"
@@ -339,15 +448,22 @@ USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
 
 mkdir -p "$CONFIG_DIR"
 
-echo "[1/4] Проверка Python зависимостей (websockets)..."
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo "[1/4] Проверка Python зависимостей (websockets)..."
+else
+    echo "[1/4] Checking Python dependencies (websockets)..."
+fi
+
 python3 -c "import websockets" 2>/dev/null || {
-    echo "Установка websockets..."
     python3 -m pip install websockets --break-system-packages 2>/dev/null || python3 -m pip install websockets
 }
 
-echo "[2/4] Регистрация субдомена '${USERNAME}' на шлюзе (${GATEWAY})..."
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo "[2/4] Регистрация субдомена '${USERNAME}' на шлюзе (${GATEWAY})..."
+else
+    echo "[2/4] Registering subdomain '${USERNAME}' on Gateway (${GATEWAY})..."
+fi
 
-# Check if we already have a token locally for this user
 EXISTING_TOKEN=""
 if [ -f "$CONFIG_FILE" ]; then
     CFG_USER=$(grep "MESH_USER" "$CONFIG_FILE" 2>/dev/null | cut -d '=' -f2 || true)
@@ -379,9 +495,6 @@ ASSIGNED_USER=$(python3 -c "import json, sys; print(json.loads(sys.argv[1]).get(
 ASSIGNED_TOKEN=$(python3 -c "import json, sys; print(json.loads(sys.argv[1]).get('token', ''))" "$REG_RESP" 2>/dev/null || true)
 
 if [ -z "$ASSIGNED_TOKEN" ]; then
-    # In case of manual re-prompt or error
-    echo -e "${YELLOW}[!] Ответ шлюза: $REG_RESP${RESET}"
-    echo -e "${YELLOW}Попытка зарегистрировать с суффиксом времени...${RESET}"
     FALLBACK_USER="${USERNAME}-$(date +%s | tail -c 4)"
     REG_RESP=$(curl -s -X POST "https://${GATEWAY}/api/register" \
         -H "Content-Type: application/json" \
@@ -391,15 +504,24 @@ if [ -z "$ASSIGNED_TOKEN" ]; then
 fi
 
 if [ -z "$ASSIGNED_TOKEN" ]; then
-    echo -e "${RED}[ERROR] Не удалось получить токен авторизации от шлюза.${RESET}"
+    echo -e "${RED}[ERROR] Failed to obtain authentication token from gateway.${RESET}"
     exit 1
 fi
 
 if [ "$ASSIGNED_USER" != "$USERNAME" ]; then
-    echo -e "${YELLOW}ℹ️  Имя '${USERNAME}' уже было занято. Автоматически назначен субдомен:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${YELLOW}ℹ️  Имя '${USERNAME}' уже было занято. Автоматически назначен субдомен:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
+    else
+        echo -e "${YELLOW}ℹ️  Name '${USERNAME}' was already taken. Automatically assigned subdomain:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
+    fi
 fi
 
-echo "[3/4] Сохранение конфигурации в ${CONFIG_FILE}..."
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo "[3/4] Сохранение конфигурации в ${CONFIG_FILE}..."
+else
+    echo "[3/4] Saving configuration to ${CONFIG_FILE}..."
+fi
+
 cat << EOF > "$CONFIG_FILE"
 MESH_GATEWAY=${GATEWAY}
 MESH_USER=${ASSIGNED_USER}
@@ -407,7 +529,12 @@ MESH_TOKEN=${ASSIGNED_TOKEN}
 EOF
 chmod 600 "$CONFIG_FILE"
 
-echo "[4/4] Настройка и запуск службы автозапуска на ПК..."
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo "[4/4] Настройка и запуск службы автозапуска на ПК..."
+else
+    echo "[4/4] Configuring and starting background autostart service..."
+fi
+
 if [ "$(uname -s)" = "Darwin" ]; then
     LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
     mkdir -p "$LAUNCH_AGENTS"
@@ -464,10 +591,8 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOF
-
     systemctl --user daemon-reload 2>/dev/null || true
     systemctl --user enable --now agy-agent.service 2>/dev/null || {
-        echo "Запуск агента в фоне (сессия без systemd user manager)..."
         pkill -f "core.agent" 2>/dev/null || true
         nohup /usr/bin/python3 -m core.agent > "$CONFIG_DIR/agent.log" 2>&1 &
     }
@@ -480,18 +605,35 @@ MCP_URL="https://${ASSIGNED_USER}.${GATEWAY}/sse?token=${ASSIGNED_TOKEN}"
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}${GREEN}🎉 Antigravity Mesh узел успешно установлен и подключен к шлюзу!${RESET}"
-echo ""
-echo -e "  💻 ${BOLD}Устройство:${RESET}      ${DETECTED_HOSTNAME} (${DETECTED_TYPE})"
-echo -e "  👤 ${BOLD}Субдомен:${RESET}        ${CYAN}${ASSIGNED_USER}.${GATEWAY}${RESET}"
-echo -e "  🔑 ${BOLD}Секретный токен:${RESET} ${ASSIGNED_TOKEN}"
-echo -e "  🔄 ${BOLD}Автозапуск:${RESET}      Включен (systemd: agy-agent.service)"
-echo ""
-echo -e "  📍 ${BOLD}Адрес MCP-сервера для подключения:${RESET}"
-echo -e "     👉 ${CYAN}${BOLD}${MCP_URL}${RESET}"
-echo ""
-echo -e "  ✨ ${BOLD}Добавление в Gemini Spark / AI Studio:${RESET}"
-echo -e "     1. Откройте: ${CYAN}https://gemini.google.com/${RESET} (или Gemini Spark)"
-echo -e "     2. Перейдите в раздел ${BOLD}Настройки ➔ MCP / Инструменты${RESET} (Settings -> Tools)"
-echo -e "     3. Вставьте ссылку: ${BOLD}${MCP_URL}${RESET}"
+if [ "$LANG_CHOICE" = "ru" ]; then
+    echo -e "${BOLD}${GREEN}🎉 Antigravity Mesh узел успешно установлен и подключен к шлюзу!${RESET}"
+    echo ""
+    echo -e "  💻 ${BOLD}Устройство:${RESET}      ${DETECTED_HOSTNAME} (${DETECTED_TYPE})"
+    echo -e "  👤 ${BOLD}Субдомен:${RESET}        ${CYAN}${ASSIGNED_USER}.${GATEWAY}${RESET}"
+    echo -e "  🔑 ${BOLD}Секретный токен:${RESET} ${ASSIGNED_TOKEN}"
+    echo -e "  🔄 ${BOLD}Автозапуск:${RESET}      Включен (фоновая служба)"
+    echo ""
+    echo -e "  📍 ${BOLD}Адрес MCP-сервера для подключения:${RESET}"
+    echo -e "     👉 ${CYAN}${BOLD}${MCP_URL}${RESET}"
+    echo ""
+    echo -e "  ✨ ${BOLD}Добавление в Gemini Spark / AI Studio:${RESET}"
+    echo -e "     1. Откройте: ${CYAN}https://gemini.google.com/${RESET} (или Gemini Spark)"
+    echo -e "     2. Перейдите в раздел ${BOLD}Настройки ➔ MCP / Инструменты${RESET} (Settings -> Tools)"
+    echo -e "     3. Вставьте ссылку: ${BOLD}${MCP_URL}${RESET}"
+else
+    echo -e "${BOLD}${GREEN}🎉 Antigravity Mesh Node successfully installed and connected to Gateway!${RESET}"
+    echo ""
+    echo -e "  💻 ${BOLD}Device:${RESET}        ${DETECTED_HOSTNAME} (${DETECTED_TYPE})"
+    echo -e "  👤 ${BOLD}Subdomain:${RESET}     ${CYAN}${ASSIGNED_USER}.${GATEWAY}${RESET}"
+    echo -e "  🔑 ${BOLD}Secret Token:${RESET}  ${ASSIGNED_TOKEN}"
+    echo -e "  🔄 ${BOLD}Autostart:${RESET}     Enabled (background service)"
+    echo ""
+    echo -e "  📍 ${BOLD}MCP Server URL for connection:${RESET}"
+    echo -e "     👉 ${CYAN}${BOLD}${MCP_URL}${RESET}"
+    echo ""
+    echo -e "  ✨ ${BOLD}Add to Google Gemini / Spark:${RESET}"
+    echo -e "     1. Open: ${CYAN}https://gemini.google.com/${RESET}"
+    echo -e "     2. Go to ${BOLD}Settings ➔ Tools / Extensions (MCP)${RESET}"
+    echo -e "     3. Paste URL: ${BOLD}${MCP_URL}${RESET}"
+fi
 echo -e "${GREEN}══════════════════════════════════════════════════════════════════════════════════${RESET}"
