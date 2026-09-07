@@ -8,26 +8,45 @@ param(
     [string]$Token = "",
     [string]$Gateway = "smart-server.online",
     [int]$Port = 8096,
+    [string]$Lang = "en",
     [switch]$DryRun
 )
+
+# Ensure UTF-8 output encoding in PowerShell console
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
 $ErrorActionPreference = "Stop"
 
 $Hostname = $env:COMPUTERNAME.ToLower() -replace '[^a-z0-9_-]', ''
-$DetectedType = "Windows Десктоп / Сервер"
-if (Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue) {
-    $DetectedType = "Windows Ноутбук (Laptop)"
+$IsLaptop = [bool](Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue)
+
+if ($Lang -eq "ru") {
+    $DetectedType = if ($IsLaptop) { "Windows Ноутбук (Laptop)" } else { "Windows Десктоп / Сервер" }
+    Write-Host "+----------------------------------------------------------------------+" -ForegroundColor Cyan
+    Write-Host "| [*] Обнаружено устройство:                                           |" -ForegroundColor Cyan
+    Write-Host "|   * Имя хоста : $Hostname" -ForegroundColor Green
+    Write-Host "|   * Тип       : $DetectedType" -ForegroundColor Yellow
+    Write-Host "|   * ОС        : Windows $([System.Environment]::OSVersion.Version)" -ForegroundColor White
+    Write-Host "+----------------------------------------------------------------------+" -ForegroundColor Cyan
+} else {
+    $DetectedType = if ($IsLaptop) { "Windows Laptop" } else { "Windows Desktop / Server" }
+    Write-Host "+----------------------------------------------------------------------+" -ForegroundColor Cyan
+    Write-Host "| [*] Detected Device:                                                 |" -ForegroundColor Cyan
+    Write-Host "|   * Hostname : $Hostname" -ForegroundColor Green
+    Write-Host "|   * Type     : $DetectedType" -ForegroundColor Yellow
+    Write-Host "|   * OS       : Windows $([System.Environment]::OSVersion.Version)" -ForegroundColor White
+    Write-Host "+----------------------------------------------------------------------+" -ForegroundColor Cyan
 }
 
-Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║ 🔍 Обнаружено устройство:" -ForegroundColor Cyan
-Write-Host "║   • Имя хоста   : $Hostname" -ForegroundColor Green
-Write-Host "║   • Тип         : $DetectedType" -ForegroundColor Yellow
-Write-Host "║   • ОС          : Windows $([System.Environment]::OSVersion.Version)" -ForegroundColor White
-Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-
 if ($DryRun) {
-    Write-Host "[DRY-RUN] Проверка зависимостей и задач: OK"
+    if ($Lang -eq "ru") {
+        Write-Host "[DRY-RUN] Проверка зависимостей и задач: OK"
+    } else {
+        Write-Host "[DRY-RUN] Dependency and task verification: OK"
+    }
     exit 0
 }
 
@@ -36,7 +55,11 @@ $hasPython = $false
 try {
     $pyVer = python --version 2>&1
     if ($LASTEXITCODE -eq 0 -or $pyVer -match "Python 3") {
-        Write-Host "[1/3] Python обнаружен: $pyVer" -ForegroundColor Green
+        if ($Lang -eq "ru") {
+            Write-Host "[1/3] Python обнаружен: $pyVer" -ForegroundColor Green
+        } else {
+            Write-Host "[1/3] Python detected: $pyVer" -ForegroundColor Green
+        }
         $hasPython = $true
     }
 } catch {
@@ -48,12 +71,20 @@ if (-not $hasPython) {
     if (Test-Path "$localPyDir\python.exe") {
         $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
         $hasPython = $true
-        Write-Host "[1/3] Python обнаружен: $localPyDir" -ForegroundColor Green
+        if ($Lang -eq "ru") {
+            Write-Host "[1/3] Python обнаружен: $localPyDir" -ForegroundColor Green
+        } else {
+            Write-Host "[1/3] Python detected: $localPyDir" -ForegroundColor Green
+        }
     }
 }
 
 if (-not $hasPython) {
-    Write-Host "[1/3] Python не найден. Автоматическая установка через winget..." -ForegroundColor Yellow
+    if ($Lang -eq "ru") {
+        Write-Host "[1/3] Python не найден. Автоматическая установка через winget..." -ForegroundColor Yellow
+    } else {
+        Write-Host "[1/3] Python not found. Installing automatically via winget..." -ForegroundColor Yellow
+    }
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         winget install --id Python.Python.3.12 -e --silent --accept-source-agreements --accept-package-agreements
         $localPyDir = "$env:LOCALAPPDATA\Programs\Python\Python312"
@@ -61,13 +92,21 @@ if (-not $hasPython) {
             $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
         }
     } else {
-        Write-Error "Python 3 не найден в PATH, и winget недоступен. Пожалуйста, установите Python с python.org."
+        if ($Lang -eq "ru") {
+            Write-Error "Python 3 не найден в PATH, и winget недоступен. Пожалуйста, установите Python с python.org."
+        } else {
+            Write-Error "Python 3 was not found in PATH, and winget is unavailable. Please install Python from python.org."
+        }
         exit 1
     }
 }
 
 # Install dependencies
-Write-Host "[2/3] Проверка библиотек (websockets)..." -ForegroundColor Yellow
+if ($Lang -eq "ru") {
+    Write-Host "[2/3] Проверка библиотек (websockets)..." -ForegroundColor Yellow
+} else {
+    Write-Host "[2/3] Checking dependencies (websockets)..." -ForegroundColor Yellow
+}
 python -m pip install websockets --quiet
 
 $ConfigDir = "$env:USERPROFILE\.config\antigravity-mesh"
@@ -103,9 +142,72 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
 }
 
 if ($Mode -eq "standalone") {
-    Write-Host "=== Запуск в режиме Local Standalone на порту $Port ===" -ForegroundColor Blue
+    if ($Lang -eq "ru") {
+        Write-Host "=== Запуск в режиме Local Standalone на порту $Port ===" -ForegroundColor Blue
+    } else {
+        Write-Host "=== Starting in Local Standalone Mode on port $Port ===" -ForegroundColor Blue
+    }
     Start-Process python -ArgumentList "-m core.server --port=$Port" -WorkingDirectory $ScriptDir -WindowStyle Hidden
-    Write-Host "🎉 Локальный MCP-сервер запущен: http://localhost:$Port/sse" -ForegroundColor Green
+    $LocalUrl = "http://localhost:$Port/sse"
+    $Copied = $false
+    try {
+        Set-Clipboard -Value $LocalUrl -ErrorAction Stop
+        $Copied = $true
+    } catch {
+        try { $LocalUrl | clip.exe 2>$null; $Copied = $true } catch {}
+    }
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($LocalUrl)
+        $b64 = [Convert]::ToBase64String($bytes)
+        [Console]::Write("`e]52;c;$b64`a")
+    } catch {}
+
+    Write-Host ""
+    Write-Host "================================================================================" -ForegroundColor Green
+    if ($Lang -eq "ru") {
+        Write-Host " [OK] Локальный MCP-сервер успешно запущен!" -ForegroundColor Green
+        Write-Host "================================================================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  1. Откройте страницу приложений Gemini Spark:" -ForegroundColor Yellow
+        Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  2. Подключите ваш MCP-сервер:" -ForegroundColor Yellow
+        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        Write-Host "  | ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):                            |" -ForegroundColor Green
+        Write-Host "  |                                                                          |" -ForegroundColor Green
+        Write-Host "  |   $LocalUrl" -ForegroundColor Yellow
+        Write-Host "  |                                                                          |" -ForegroundColor Green
+        if ($Copied) {
+            Write-Host "  |   [OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)        |" -ForegroundColor Green
+        } else {
+            Write-Host "  |   (Выделите ссылку и скопируйте через Ctrl+C)                            |" -ForegroundColor Gray
+        }
+        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    } else {
+        Write-Host " [OK] Local MCP Server successfully started!" -ForegroundColor Green
+        Write-Host "================================================================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  1. Open Gemini Spark Apps in your browser:" -ForegroundColor Yellow
+        Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  2. Connect your MCP Server:" -ForegroundColor Yellow
+        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        Write-Host "  | LOCAL MCP SERVER SSE ENDPOINT URL:                                       |" -ForegroundColor Green
+        Write-Host "  |                                                                          |" -ForegroundColor Green
+        Write-Host "  |   $LocalUrl" -ForegroundColor Yellow
+        Write-Host "  |                                                                          |" -ForegroundColor Green
+        if ($Copied) {
+            Write-Host "  |   [OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)                  |" -ForegroundColor Green
+        } else {
+            Write-Host "  |   (Select link and press Ctrl+C to copy)                                 |" -ForegroundColor Gray
+        }
+        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    }
+    Write-Host "================================================================================" -ForegroundColor Green
     exit 0
 }
 
@@ -114,7 +216,11 @@ if ([string]::IsNullOrWhiteSpace($User)) {
     $User = $Hostname
 }
 
-Write-Host "[2/3] Регистрация субдомена '$User' на шлюзе ($Gateway)..." -ForegroundColor Yellow
+if ($Lang -eq "ru") {
+    Write-Host "[2/3] Регистрация субдомена '$User' на шлюзе ($Gateway)..." -ForegroundColor Yellow
+} else {
+    Write-Host "[2/3] Registering subdomain '$User' on gateway ($Gateway)..." -ForegroundColor Yellow
+}
 $regPayload = @{ username = $User; auto_suffix = $true } | ConvertTo-Json
 $response = Invoke-RestMethod -Uri "https://$Gateway/api/register" -Method Post -Body $regPayload -ContentType "application/json"
 
@@ -122,7 +228,28 @@ $AssignedUser = $response.username
 $AssignedToken = $response.token
 $SseUrl = $response.sse_url
 
-Write-Host "[3/3] Настройка автозапуска в Windows..." -ForegroundColor Green
+# Quick Copy to Clipboard
+$Copied = $false
+try {
+    Set-Clipboard -Value $SseUrl -ErrorAction Stop
+    $Copied = $true
+} catch {
+    try {
+        $SseUrl | clip.exe 2>$null
+        $Copied = $true
+    } catch {}
+}
+try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($SseUrl)
+    $b64 = [Convert]::ToBase64String($bytes)
+    [Console]::Write("`e]52;c;$b64`a")
+} catch {}
+
+if ($Lang -eq "ru") {
+    Write-Host "[3/3] Настройка автозапуска в Windows..." -ForegroundColor Green
+} else {
+    Write-Host "[3/3] Configuring Windows background autostart..." -ForegroundColor Green
+}
 $envFile = "$ConfigDir\agent.env"
 @"
 MESH_GATEWAY=$Gateway
@@ -151,19 +278,68 @@ WshShell.Run "python -m core.agent", 0, False
 Start-Process python -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
 
 Write-Host ""
-Write-Host "══════════════════════════════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "🎉 Antigravity Mesh узел успешно установлен и подключен к шлюзу!" -ForegroundColor Green
-Write-Host ""
-Write-Host "  💻 Устройство:      $Hostname ($DetectedType)"
-Write-Host "  👤 Субдомен:        $AssignedUser.$Gateway" -ForegroundColor Cyan
-Write-Host "  🔑 Секретный токен: $AssignedToken"
-Write-Host "  🔄 Автозапуск:      Включен (Windows Startup VBS)"
-Write-Host ""
-Write-Host "  📍 Адрес MCP-сервера для подключения:"
-Write-Host "     👉 $SseUrl" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  ✨ Добавление в Gemini Spark / AI Studio:"
-Write-Host "     1. Откройте: https://gemini.google.com/"
-Write-Host "     2. Перейдите в раздел Настройки ➔ MCP / Инструменты (Settings -> Tools)"
-Write-Host "     3. Вставьте ссылку: $SseUrl"
-Write-Host "══════════════════════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "================================================================================" -ForegroundColor Green
+if ($Lang -eq "ru") {
+    Write-Host " [OK] Antigravity Mesh узел успешно установлен и запущен!" -ForegroundColor Green
+    Write-Host "================================================================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  * Устройство:      $Hostname ($DetectedType)"
+    Write-Host "  * Субдомен:        $AssignedUser.$Gateway" -ForegroundColor Cyan
+    Write-Host "  * Секретный токен: $AssignedToken"
+    Write-Host "  * Автозапуск:      Включен (Windows Startup VBS)"
+    Write-Host ""
+    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  1. Откройте страницу приложений Gemini Spark в браузере:" -ForegroundColor Yellow
+    Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  2. Подключите ваш персональный MCP-сервер:" -ForegroundColor Yellow
+    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    Write-Host "  | ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):                                        |" -ForegroundColor Green
+    Write-Host "  |                                                                          |" -ForegroundColor Green
+    Write-Host "  |   $SseUrl" -ForegroundColor Yellow
+    Write-Host "  |                                                                          |" -ForegroundColor Green
+    if ($Copied) {
+        Write-Host "  |   [OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)        |" -ForegroundColor Green
+    } else {
+        Write-Host "  |   (Выделите ссылку и скопируйте через Ctrl+C)                            |" -ForegroundColor Gray
+    }
+    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Инструкция подключения в Gemini Spark / AI Studio:"
+    Write-Host "  1. Перейдите по ссылке: https://gemini.google.com/spark/apps"
+    Write-Host "  2. Нажмите 'Add app' или перейдите в Настройки -> MCP"
+    Write-Host "  3. Вставьте скопированную ссылку (Ctrl+V) и нажмите Connect!"
+} else {
+    Write-Host " [OK] Antigravity Mesh node successfully installed and running!" -ForegroundColor Green
+    Write-Host "================================================================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  * Device:       $Hostname ($DetectedType)"
+    Write-Host "  * Subdomain:    $AssignedUser.$Gateway" -ForegroundColor Cyan
+    Write-Host "  * Secret Token: $AssignedToken"
+    Write-Host "  * Autostart:    Enabled (Windows Startup VBS)"
+    Write-Host ""
+    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  1. Open Gemini Spark Apps in your browser:" -ForegroundColor Yellow
+    Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  2. Connect your personal MCP Server:" -ForegroundColor Yellow
+    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    Write-Host "  | MCP SERVER SSE ENDPOINT URL:                                             |" -ForegroundColor Green
+    Write-Host "  |                                                                          |" -ForegroundColor Green
+    Write-Host "  |   $SseUrl" -ForegroundColor Yellow
+    Write-Host "  |                                                                          |" -ForegroundColor Green
+    if ($Copied) {
+        Write-Host "  |   [OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)                  |" -ForegroundColor Green
+    } else {
+        Write-Host "  |   (Select link and press Ctrl+C to copy)                                 |" -ForegroundColor Gray
+    }
+    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Connection Steps in Gemini Spark / AI Studio:"
+    Write-Host "  1. Open: https://gemini.google.com/spark/apps"
+    Write-Host "  2. Click 'Add app' or navigate to Tools / MCP configuration"
+    Write-Host "  3. Paste the URL (Ctrl+V) and click Connect!"
+}
+Write-Host "================================================================================" -ForegroundColor Green
