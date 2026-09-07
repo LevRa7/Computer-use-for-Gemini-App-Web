@@ -202,6 +202,45 @@ print_device_info() {
     fi
 }
 
+print_mcp_box() {
+    local title="$1"
+    local url="$2"
+    local copy_msg="$3"
+
+    local max_len=${#title}
+    [ ${#url} -gt $max_len ] && max_len=${#url}
+    [ -n "$copy_msg" ] && [ ${#copy_msg} -gt $max_len ] && max_len=${#copy_msg}
+
+    local width=$(( max_len + 4 ))
+    [ $width -lt 84 ] && width=84
+
+    local dashes=$(printf '%*s' "$width" '' | tr ' ' '-')
+    local border="  +${dashes}+"
+    local empty="  |$(printf '%*s' "$width" '')|"
+
+    echo -e "${GREEN}${border}${RESET}"
+    
+    # Title
+    local pad_title=$(( width - 2 - ${#title} ))
+    printf "  ${GREEN}|${RESET} ${BOLD}%s${RESET}%*s ${GREEN}|${RESET}\n" "$title" "$pad_title" ""
+
+    echo -e "${GREEN}${empty}${RESET}"
+
+    # URL
+    local pad_url=$(( width - 2 - ${#url} ))
+    printf "  ${GREEN}|${RESET} ${BOLD}${YELLOW}%s${RESET}%*s ${GREEN}|${RESET}\n" "$url" "$pad_url" ""
+
+    echo -e "${GREEN}${empty}${RESET}"
+
+    # Copy message
+    if [ -n "$copy_msg" ]; then
+        local pad_copy=$(( width - 2 - ${#copy_msg} ))
+        printf "  ${GREEN}|${RESET} ${BOLD}${GREEN}%s${RESET}%*s ${GREEN}|${RESET}\n" "$copy_msg" "$pad_copy" ""
+    fi
+
+    echo -e "${GREEN}${border}${RESET}"
+}
+
 # Dry-run
 if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] Simulating Antigravity Mesh installation..."
@@ -431,17 +470,13 @@ EOF
         echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
         echo ""
         echo -e "  ${BOLD}2. Подключите ваш персональный MCP-сервер:${RESET}"
-        echo -e "  ${GREEN}┌────────────────────────────────────────────────────────────────────────────┐${RESET}"
-        echo -e "  ${GREEN}│${RESET} ${BOLD}ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):${RESET}"
-        echo -e "  ${GREEN}│${RESET}"
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${YELLOW}${MCP_LOCAL_URL}${RESET}"
-        echo -e "  ${GREEN}│${RESET}"
+        local copy_msg=""
         if [ "$COPIED" = true ]; then
-            echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)${RESET}"
+            copy_msg="[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)"
         else
-            echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ Скопировано в буфер обмена (OSC 52) / или выделите и скопируйте${RESET}"
+            copy_msg="[OK] Скопировано в буфер обмена (OSC 52) / или выделите и скопируйте"
         fi
-        echo -e "  ${GREEN}└────────────────────────────────────────────────────────────────────────────┘${RESET}"
+        print_mcp_box "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):" "$MCP_LOCAL_URL" "$copy_msg"
         echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
         echo ""
         echo -e "  ${BOLD}Шаги подключения в Google Gemini / Spark:${RESET}"
@@ -459,17 +494,13 @@ EOF
         echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
         echo ""
         echo -e "  ${BOLD}2. Connect your personal MCP Server:${RESET}"
-        echo -e "  ${GREEN}┌────────────────────────────────────────────────────────────────────────────┐${RESET}"
-        echo -e "  ${GREEN}│${RESET} ${BOLD}MCP SERVER SSE ENDPOINT URL:${RESET}"
-        echo -e "  ${GREEN}│${RESET}"
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${YELLOW}${MCP_LOCAL_URL}${RESET}"
-        echo -e "  ${GREEN}│${RESET}"
+        local copy_msg=""
         if [ "$COPIED" = true ]; then
-            echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)${RESET}"
+            copy_msg="[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)"
         else
-            echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ Copied to clipboard (OSC 52) / or select and copy${RESET}"
+            copy_msg="[OK] Copied to clipboard (OSC 52) / or select and copy"
         fi
-        echo -e "  ${GREEN}└────────────────────────────────────────────────────────────────────────────┘${RESET}"
+        print_mcp_box "LOCAL MCP SERVER SSE ENDPOINT URL:" "$MCP_LOCAL_URL" "$copy_msg"
         echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
         echo ""
         echo -e "  ${BOLD}Connection Steps in Google Gemini / Spark:${RESET}"
@@ -685,17 +716,13 @@ if [ "$LANG_CHOICE" = "ru" ]; then
     echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
     echo ""
     echo -e "  ${BOLD}2. Подключите ваш персональный MCP-сервер:${RESET}"
-    echo -e "  ${GREEN}┌────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${GREEN}│${RESET} ${BOLD}ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):${RESET}"
-    echo -e "  ${GREEN}│${RESET}"
-    echo -e "  ${GREEN}│${RESET}   ${BOLD}${YELLOW}${MCP_URL}${RESET}"
-    echo -e "  ${GREEN}│${RESET}"
+    local copy_msg=""
     if [ "$COPIED" = true ]; then
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)${RESET}"
+        copy_msg="[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)"
     else
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ Скопировано в буфер обмена (OSC 52) / или выделите и скопируйте${RESET}"
+        copy_msg="[OK] Скопировано в буфер обмена (OSC 52) / или выделите и скопируйте"
     fi
-    echo -e "  ${GREEN}└────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    print_mcp_box "ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):" "$MCP_URL" "$copy_msg"
     echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
     echo ""
     echo -e "  ${BOLD}Шаги подключения в Google Gemini / Spark:${RESET}"
@@ -715,17 +742,13 @@ else
     echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
     echo ""
     echo -e "  ${BOLD}2. Connect your personal MCP Server:${RESET}"
-    echo -e "  ${GREEN}┌────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${GREEN}│${RESET} ${BOLD}MCP SERVER SSE ENDPOINT URL:${RESET}"
-    echo -e "  ${GREEN}│${RESET}"
-    echo -e "  ${GREEN}│${RESET}   ${BOLD}${YELLOW}${MCP_URL}${RESET}"
-    echo -e "  ${GREEN}│${RESET}"
+    local copy_msg=""
     if [ "$COPIED" = true ]; then
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)${RESET}"
+        copy_msg="[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)"
     else
-        echo -e "  ${GREEN}│${RESET}   ${BOLD}${GREEN}✔ Copied to clipboard (OSC 52) / or select and copy${RESET}"
+        copy_msg="[OK] Copied to clipboard (OSC 52) / or select and copy"
     fi
-    echo -e "  ${GREEN}└────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    print_mcp_box "MCP SERVER SSE ENDPOINT URL:" "$MCP_URL" "$copy_msg"
     echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
     echo ""
     echo -e "  ${BOLD}Connection Steps in Google Gemini / Spark:${RESET}"

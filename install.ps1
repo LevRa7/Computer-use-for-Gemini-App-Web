@@ -141,6 +141,41 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
     $ScriptDir = $BootstrapDir
 }
 
+function Print-McpBox($Title, $Url, $CopiedText, $BorderColor = "Green") {
+    $MinLen = [Math]::Max($Title.Length, $Url.Length)
+    if ($CopiedText) {
+        $MinLen = [Math]::Max($MinLen, $CopiedText.Length)
+    }
+    $ContentWidth = [Math]::Max($MinLen + 4, 84)
+    $Border = "  +" + ("-" * $ContentWidth) + "+"
+    $Empty  = "  |" + (" " * $ContentWidth) + "|"
+
+    Write-Host $Border -ForegroundColor $BorderColor
+    
+    $padTitle = $ContentWidth - 2 - $Title.Length
+    Write-Host "  | " -NoNewline -ForegroundColor $BorderColor
+    Write-Host $Title -NoNewline -ForegroundColor White
+    Write-Host ((" " * $padTitle) + " |") -ForegroundColor $BorderColor
+
+    Write-Host $Empty -ForegroundColor $BorderColor
+
+    $padUrl = $ContentWidth - 2 - $Url.Length
+    Write-Host "  | " -NoNewline -ForegroundColor $BorderColor
+    Write-Host $Url -NoNewline -ForegroundColor Yellow
+    Write-Host ((" " * $padUrl) + " |") -ForegroundColor $BorderColor
+
+    Write-Host $Empty -ForegroundColor $BorderColor
+
+    if ($CopiedText) {
+        $padCopy = $ContentWidth - 2 - $CopiedText.Length
+        Write-Host "  | " -NoNewline -ForegroundColor $BorderColor
+        Write-Host $CopiedText -NoNewline -ForegroundColor Green
+        Write-Host ((" " * $padCopy) + " |") -ForegroundColor $BorderColor
+    }
+
+    Write-Host $Border -ForegroundColor $BorderColor
+}
+
 if ($Mode -eq "standalone") {
     if ($Lang -eq "ru") {
         Write-Host "=== Запуск в режиме Local Standalone на порту $Port ===" -ForegroundColor Blue
@@ -168,17 +203,8 @@ if ($Mode -eq "standalone") {
         Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "  2. Подключите ваш MCP-сервер:" -ForegroundColor Yellow
-        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
-        Write-Host "  | ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):                            |" -ForegroundColor Green
-        Write-Host "  |                                                                          |" -ForegroundColor Green
-        Write-Host "  |   $LocalUrl" -ForegroundColor Yellow
-        Write-Host "  |                                                                          |" -ForegroundColor Green
-        if ($Copied) {
-            Write-Host "  |   [OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)        |" -ForegroundColor Green
-        } else {
-            Write-Host "  |   (Выделите ссылку и скопируйте через Ctrl+C)                            |" -ForegroundColor Gray
-        }
-        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "(Выделите ссылку и скопируйте через Ctrl+C)" }
+        Print-McpBox "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):" $LocalUrl $copyMsg
         Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
     } else {
         Write-Host " [OK] Local MCP Server successfully started!" -ForegroundColor Green
@@ -189,17 +215,8 @@ if ($Mode -eq "standalone") {
         Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "  2. Connect your MCP Server:" -ForegroundColor Yellow
-        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
-        Write-Host "  | LOCAL MCP SERVER SSE ENDPOINT URL:                                       |" -ForegroundColor Green
-        Write-Host "  |                                                                          |" -ForegroundColor Green
-        Write-Host "  |   $LocalUrl" -ForegroundColor Yellow
-        Write-Host "  |                                                                          |" -ForegroundColor Green
-        if ($Copied) {
-            Write-Host "  |   [OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)                  |" -ForegroundColor Green
-        } else {
-            Write-Host "  |   (Select link and press Ctrl+C to copy)                                 |" -ForegroundColor Gray
-        }
-        Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+        $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "(Select link and press Ctrl+C to copy)" }
+        Print-McpBox "LOCAL MCP SERVER SSE ENDPOINT URL:" $LocalUrl $copyMsg
         Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
     }
     Write-Host "================================================================================" -ForegroundColor Green
@@ -283,17 +300,8 @@ if ($Lang -eq "ru") {
     Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  2. Подключите ваш персональный MCP-сервер:" -ForegroundColor Yellow
-    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
-    Write-Host "  | ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):                                        |" -ForegroundColor Green
-    Write-Host "  |                                                                          |" -ForegroundColor Green
-    Write-Host "  |   $SseUrl" -ForegroundColor Yellow
-    Write-Host "  |                                                                          |" -ForegroundColor Green
-    if ($Copied) {
-        Write-Host "  |   [OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)        |" -ForegroundColor Green
-    } else {
-        Write-Host "  |   (Выделите ссылку и скопируйте через Ctrl+C)                            |" -ForegroundColor Gray
-    }
-    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "(Выделите ссылку и скопируйте через Ctrl+C)" }
+    Print-McpBox "ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):" $SseUrl $copyMsg
     Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Инструкция подключения в Gemini Spark / AI Studio:"
@@ -314,17 +322,8 @@ if ($Lang -eq "ru") {
     Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  2. Connect your personal MCP Server:" -ForegroundColor Yellow
-    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
-    Write-Host "  | MCP SERVER SSE ENDPOINT URL:                                             |" -ForegroundColor Green
-    Write-Host "  |                                                                          |" -ForegroundColor Green
-    Write-Host "  |   $SseUrl" -ForegroundColor Yellow
-    Write-Host "  |                                                                          |" -ForegroundColor Green
-    if ($Copied) {
-        Write-Host "  |   [OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)                  |" -ForegroundColor Green
-    } else {
-        Write-Host "  |   (Select link and press Ctrl+C to copy)                                 |" -ForegroundColor Gray
-    }
-    Write-Host "  +--------------------------------------------------------------------------+" -ForegroundColor Green
+    $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "(Select link and press Ctrl+C to copy)" }
+    Print-McpBox "MCP SERVER SSE ENDPOINT URL:" $SseUrl $copyMsg
     Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Connection Steps in Gemini Spark / AI Studio:"
