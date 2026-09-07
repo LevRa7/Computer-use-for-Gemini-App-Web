@@ -156,11 +156,6 @@ if ($Mode -eq "standalone") {
     } catch {
         try { $LocalUrl | clip.exe 2>$null; $Copied = $true } catch {}
     }
-    try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($LocalUrl)
-        $b64 = [Convert]::ToBase64String($bytes)
-        [Console]::Write("`e]52;c;$b64`a")
-    } catch {}
 
     Write-Host ""
     Write-Host "================================================================================" -ForegroundColor Green
@@ -239,11 +234,6 @@ try {
         $Copied = $true
     } catch {}
 }
-try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($SseUrl)
-    $b64 = [Convert]::ToBase64String($bytes)
-    [Console]::Write("`e]52;c;$b64`a")
-} catch {}
 
 if ($Lang -eq "ru") {
     Write-Host "[3/3] Настройка автозапуска в Windows..." -ForegroundColor Green
