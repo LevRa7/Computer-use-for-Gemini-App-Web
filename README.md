@@ -66,9 +66,9 @@ cd Gemini-APP-Web-for-computer-use---FREE
 
 ## 📱 Connecting to Google Gemini
 
-1. Open **[gemini.google.com](https://gemini.google.com/)** (or the Gemini mobile app).
-2. Go to **Settings ⚙️ ➔ Tools / Extensions (MCP)**.
-3. Add an MCP server and paste your unique secure URL provided by the installer:
+1. Open **[gemini.google.com/spark/apps](https://gemini.google.com/spark/apps)** (or the Gemini mobile app).
+2. Click **Add App** (or go to **Settings ⚙️ ➔ Tools / Extensions (MCP)**).
+3. The MCP SSE URL is **automatically copied to your clipboard** during install — just paste it (**Ctrl+V**):
    ```text
    https://<your-device-name>.smart-server.online/sse?token=<your_secret_token>
    ```
@@ -181,9 +181,9 @@ cd Gemini-APP-Web-for-computer-use---FREE
 
 ## 📱 Подключение к Google Gemini
 
-1. Откройте **[gemini.google.com](https://gemini.google.com/)** (в браузере или приложении).
-2. Нажмите **Настройки ⚙️ ➔ Инструменты / Расширения (MCP)**.
-3. Добавьте сервер и вставьте выданный установщиком URL:
+1. Откройте страницу **[gemini.google.com/spark/apps](https://gemini.google.com/spark/apps)** (в браузере или приложении).
+2. Нажмите **Добавить приложение** (Add App / Настройки ➔ MCP).
+3. Ссылка на ваш MCP-сервер **автоматически скопирована в буфер обмена** при установке — просто вставьте её (**Ctrl+V**):
    ```text
    https://<имя-вашего-пк>.smart-server.online/sse?token=<ваш_секретный_токен>
    ```
