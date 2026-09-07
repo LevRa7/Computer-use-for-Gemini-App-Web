@@ -1,0 +1,22 @@
+[
+  {
+    "status": "success",
+    "command": "uptime",
+    "type": "bash",
+    "exit_code": 0,
+    "stdout": " 14:57:14 up 4 days, 16:06,  0 users,  load average: 0.27, 0.40, 0.43\n",
+    "stderr": "",
+    "duration_ms": 4.79,
+    "timestamp": "2026-09-06T14:57:14.722264+00:00"
+  },
+  {
+    "status": "success",
+    "command": "uptime",
+    "type": "bash",
+    "exit_code": 0,
+    "stdout": " 14:57:09 up 4 days, 16:06,  0 users,  load average: 0.30, 0.41, 0.44\n",
+    "stderr": "",
+    "duration_ms": 33.2,
+    "timestamp": "2026-09-06T14:57:09.574505+00:00"
+  }
+]

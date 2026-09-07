@@ -1,0 +1,321 @@
+[
+  {
+    "task_id": "task_1788712026",
+    "finished_at": "2026-09-06T16:27:26.992218+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 18.07,
+    "exec_duration_seconds": 1.98,
+    "upload_duration_seconds": 0.95,
+    "total_runner_time_seconds": 3.87,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788712026",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'cp -f /home/lev/MyProjects/antigravity-mesh/server_profile.md /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_spec.md && cp -f /home/lev/MyProjects/antigravity-mesh/SUBAGENT_MESH_SKILL.md /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_plan.md && mkdir -p /home/lev/MyProjects/antigravity-mesh/docs && cp -f /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_*.md /home/lev/MyProjects/antigravity-mesh/docs/ && ls -lh /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "exit_code": 0,
+        "duration_seconds": 1.98
+      }
+    ],
+    "output_length_chars": 774
+  },
+  {
+    "task_id": "task_1788711998",
+    "finished_at": "2026-09-06T16:26:57.690453+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 16.67,
+    "exec_duration_seconds": 2.07,
+    "upload_duration_seconds": 0.9,
+    "total_runner_time_seconds": 3.92,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788711998",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 touch /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_spec.md /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_plan.md",
+        "exit_code": 0,
+        "duration_seconds": 2.07
+      }
+    ],
+    "output_length_chars": 205
+  },
+  {
+    "task_id": "task_1788711970",
+    "finished_at": "2026-09-06T16:26:21.045834+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 8.14,
+    "exec_duration_seconds": 1.91,
+    "upload_duration_seconds": 0.94,
+    "total_runner_time_seconds": 3.85,
+    "status": "failed",
+    "exit_code": 2,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788711970",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'ls -lh /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "exit_code": 2,
+        "duration_seconds": 1.9
+      }
+    ],
+    "output_length_chars": 267
+  },
+  {
+    "task_id": "task_1788711884",
+    "finished_at": "2026-09-06T16:25:06.514607+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 19.49,
+    "exec_duration_seconds": 1.92,
+    "upload_duration_seconds": 0.96,
+    "total_runner_time_seconds": 3.98,
+    "status": "failed",
+    "exit_code": 2,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788711884",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'ls -lh /home/lev/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "exit_code": 2,
+        "duration_seconds": 1.92
+      }
+    ],
+    "output_length_chars": 267
+  },
+  {
+    "task_id": "task_1788711525",
+    "finished_at": "2026-09-06T16:19:06.936691+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 18.86,
+    "exec_duration_seconds": 2.14,
+    "upload_duration_seconds": 1.82,
+    "total_runner_time_seconds": 4.9,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788711525",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'ls -lh /home/lev/MyProjects/antigravity-mesh/'",
+        "exit_code": 0,
+        "duration_seconds": 2.14
+      }
+    ],
+    "output_length_chars": 2018
+  },
+  {
+    "task_id": "task_1788700007",
+    "finished_at": "2026-09-06T15:43:40.356882+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 9409.74,
+    "exec_duration_seconds": 2.69,
+    "upload_duration_seconds": 1.04,
+    "total_runner_time_seconds": 4.66,
+    "status": "failed",
+    "exit_code": 2,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700007",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 bash << 'EOF_REMOTE'",
+        "exit_code": 0,
+        "duration_seconds": 2.64
+      },
+      {
+        "command": "mkdir -p /home/lev/MyProjects/antigravity-mesh/docs && cd /home/lev/MyProjects/antigravity-mesh && cat << 'EOF_SPEC' > antigravity_mesh_spec.md",
+        "exit_code": 0,
+        "duration_seconds": 0.01
+      },
+      {
+        "command": "# 🌐 Antigravity Mesh: Спецификация архитектуры коробочного решения (Turnkey Edition)",
+        "exit_code": 0,
+        "duration_seconds": 0.01
+      },
+      {
+        "command": "## 1. Концепция и цели продукта",
+        "exit_code": 0,
+        "duration_seconds": 0.01
+      },
+      {
+        "command": "**Цель:** Предоставить любому пользователю возможность развернуть персональный или управляемый узел Antigravity Mesh за одну команду (`One-Line Install & Zero-Config MCP`), без необходимости вручную настраивать домены, открывать порты роутера или возиться с SSL-сертификатами, с сохранением возможности 100% автономной установки для опытных администраторов.",
+        "exit_code": 2,
+        "duration_seconds": 0.01
+      }
+    ],
+    "output_length_chars": 1347
+  },
+  {
+    "task_id": "task_1788700006",
+    "finished_at": "2026-09-06T15:31:48.326548+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 8698.84,
+    "exec_duration_seconds": 2.44,
+    "upload_duration_seconds": 0.94,
+    "total_runner_time_seconds": 4.43,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700006",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'cd ~/MyProjects/antigravity-mesh && if [ -d agy-gdrive-runner ]; then cp -rn agy-gdrive-runner/* . 2>/dev/null || true; fi && mkdir -p docs && (cp -f docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || true) && (cp -f docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || true) && echo \"=== SPEC AND PLAN FILES ===\" && ls -la antigravity_mesh_spec.md antigravity_mesh_plan.md && echo \"=== GIT STATUS ===\" && git add . 2>/dev/null && git commit -m \"docs: record architecture spec and TDD plan\" 2>/dev/null || true; git status -s'",
+        "exit_code": 0,
+        "duration_seconds": 2.44
+      }
+    ],
+    "output_length_chars": 1560
+  },
+  {
+    "task_id": "task_1788700005",
+    "finished_at": "2026-09-06T15:31:41.264264+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 8047.51,
+    "exec_duration_seconds": 647.71,
+    "upload_duration_seconds": 1.1,
+    "total_runner_time_seconds": 649.86,
+    "status": "failed",
+    "exit_code": -9,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700005",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'tar -tf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz | head -n 15; echo \"=== LOCATING PYTEST ===\"; find /home/lev -name pytest 2>/dev/null | head -n 10; echo \"=== VENV PYTHON ===\"; /home/lev/MyProjects/.venv/bin/python3 --version 2>&1 || true; ls -la /home/lev/MyProjects/.venv/bin/'",
+        "exit_code": -9,
+        "duration_seconds": 647.71
+      }
+    ],
+    "output_length_chars": 976
+  },
+  {
+    "task_id": "task_1788700004",
+    "finished_at": "2026-09-06T15:20:27.311784+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 8020.25,
+    "exec_duration_seconds": 2.17,
+    "upload_duration_seconds": 0.9,
+    "total_runner_time_seconds": 3.95,
+    "status": "failed",
+    "exit_code": 127,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700004",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'mkdir -p ~/MyProjects/antigravity-mesh && tar -xzf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz -C ~/MyProjects/antigravity-mesh && cd ~/MyProjects/antigravity-mesh && git init 2>/dev/null || true && echo \"=== STRUCTURE ===\" && ls -la && echo \"=== RUNNING TESTS ===\" && (python3 -m pytest tests/ -v 2>&1 || ../.venv/bin/pytest tests/ -v 2>&1 || pytest tests/ -v 2>&1) && echo \"=== TESTING INSTALLER DRY RUN ===\" && bash install.sh --dry-run --mode=standalone --tls=none --port=8096'",
+        "exit_code": 127,
+        "duration_seconds": 2.17
+      }
+    ],
+    "output_length_chars": 1024
+  },
+  {
+    "task_id": "task_1788700003",
+    "finished_at": "2026-09-06T15:15:35.401578+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 7724.44,
+    "exec_duration_seconds": 7.05,
+    "upload_duration_seconds": 0.97,
+    "total_runner_time_seconds": 8.93,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700003",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'mkdir -p ~/MyProjects' && tar -czf /tmp/antigravity-mesh-latest.tar.gz -C /root agy-gdrive-runner && sshpass -p 'ST720p' scp -o StrictHostKeyChecking=no /tmp/antigravity-mesh-latest.tar.gz lev@100.119.202.62:~/MyProjects/ && sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 'ls -la ~/MyProjects'",
+        "exit_code": 0,
+        "duration_seconds": 7.05
+      }
+    ],
+    "output_length_chars": 1468
+  },
+  {
+    "task_id": "task_1788700001",
+    "finished_at": "2026-09-06T13:11:32.928208+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 286.08,
+    "exec_duration_seconds": 4.79,
+    "upload_duration_seconds": 1.02,
+    "total_runner_time_seconds": 6.86,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788700001",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no root@100.86.180.81 \"echo '=== SYSTEM INFO ==='; hostnamectl; echo '=== CPU INFO ==='; lscpu | grep -E 'Model name|CPU\\(s\\):|Thread\\(s\\) per core|Core\\(s\\) per socket'; echo '=== MEMORY INFO ==='; free -h; echo '=== DISK INFO ==='; df -h /; echo '=== TOP PROCESSES BY CPU ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%cpu | head -n 12; echo '=== TOP PROCESSES BY MEM ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%mem | head -n 12\"",
+        "exit_code": 0,
+        "duration_seconds": 4.78
+      }
+    ],
+    "output_length_chars": 3075
+  },
+  {
+    "task_id": "task_1788692002",
+    "finished_at": "2026-09-06T12:41:43.781368+00:00",
+    "created_at": null,
+    "queue_latency_seconds": 6496.18,
+    "exec_duration_seconds": 4.34,
+    "upload_duration_seconds": 0.84,
+    "total_runner_time_seconds": 6.45,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_1788692002",
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no root@100.86.180.81 'uptime && free -h && df -h && ps -eo pid,user,%cpu,%mem,comm --sort=-%mem | head -n 12'",
+        "exit_code": 0,
+        "duration_seconds": 4.33
+      }
+    ],
+    "output_length_chars": 2582
+  },
+  {
+    "task_id": "task_test_live_1788698154",
+    "finished_at": "2026-09-06T12:36:09.544409+00:00",
+    "created_at": "2026-09-06T12:35:54.699006+00:00",
+    "queue_latency_seconds": 5.41,
+    "exec_duration_seconds": 8.6,
+    "upload_duration_seconds": 0.86,
+    "total_runner_time_seconds": 10.3,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_test_live_1788698154",
+    "commands": [
+      {
+        "command": "sshpass -p ST720p ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.86.180.81 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
+        "exit_code": 0,
+        "duration_seconds": 8.6
+      }
+    ],
+    "output_length_chars": 852
+  },
+  {
+    "task_id": "task_test_live_1788696011",
+    "finished_at": "2026-09-06T12:00:34.753587+00:00",
+    "created_at": "2026-09-06T12:00:11.665192+00:00",
+    "queue_latency_seconds": 20.24,
+    "exec_duration_seconds": 1.93,
+    "upload_duration_seconds": 0.98,
+    "total_runner_time_seconds": 3.83,
+    "status": "completed",
+    "exit_code": 0,
+    "live_url": "https://levra7-ai.mooo.com/api/agy/live/task_test_live_1788696011",
+    "commands": [
+      {
+        "command": "sshpass -p ST720p ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.86.180.81 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
+        "exit_code": 0,
+        "duration_seconds": 1.93
+      }
+    ],
+    "output_length_chars": 844
+  },
+  {
+    "task_id": "task_1788694948",
+    "finished_at": "2026-09-06T11:42:38.096391+00:00",
+    "created_at": "2026-09-06T11:42:28.791380+00:00",
+    "queue_latency_seconds": 5.26,
+    "exec_duration_seconds": 4.04,
+    "upload_duration_seconds": 0.83,
+    "total_runner_time_seconds": 4.87,
+    "status": "completed",
+    "exit_code": 0,
+    "commands": [
+      {
+        "command": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no root@100.86.180.81 \"hostname; uname -a; lscpu | grep 'Model name'; free -h; df -h /; uptime\"",
+        "exit_code": 0,
+        "duration_seconds": 4.04
+      }
+    ],
+    "output_length_chars": 733
+  }
+]

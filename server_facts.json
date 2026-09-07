@@ -1,0 +1,176 @@
+{
+  "schema_version": "1.0",
+  "synchronized_at": "2026-09-06T17:12:22.563785+00:00",
+  "primary_server": {
+    "hostname": "racknerd-778284c",
+    "public_ip": "204.152.223.171",
+    "domain": "levra7-ai.mooo.com",
+    "tailscale_ip": "100.75.165.28",
+    "os": "Ubuntu 22.04.5 LTS",
+    "kernel": "5.15.0-190-generic",
+    "uptime_hours": 114.37,
+    "load_average": [
+      0.77,
+      0.72,
+      0.67
+    ],
+    "ram": {
+      "total_mb": 2464,
+      "available_mb": 326,
+      "used_mb": 2138,
+      "swap_total_mb": 1279,
+      "swap_used_mb": 1279
+    },
+    "disk": {
+      "total_gb": 38.06,
+      "free_gb": 2.38,
+      "used_gb": 33.95,
+      "used_pct": 89.2
+    },
+    "tools_installed": {
+      "agy": true,
+      "sshpass": true,
+      "docker": true,
+      "python3": true,
+      "nginx": true
+    },
+    "services": {
+      "omniroute.service": "active",
+      "nginx.service": "active",
+      "agy-webhook.service": "active",
+      "agy-watcher.service": "inactive",
+      "agy-mcp.service": "active",
+      "mariadb.service": "active",
+      "docker.service": "active",
+      "containerd.service": "active",
+      "tailscaled.service": "active",
+      "sing-box.service": "inactive"
+    }
+  },
+  "known_remote_nodes": [
+    {
+      "name": "matebook16-deb-1",
+      "hostname": "Matebook16-Deb",
+      "tailscale_ip": "100.119.202.62",
+      "ssh_user": "lev",
+      "auth_type": "password",
+      "os": "Debian GNU/Linux 13 (trixie)",
+      "cpu": "AMD Ryzen 7 5800H (16 vCPU)",
+      "ram": "14 GiB",
+      "role": "Desktop Workstation & AI Development",
+      "ssh_command_example": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no lev@100.119.202.62 '<cmd>'"
+    },
+    {
+      "name": "debian-compute-node",
+      "hostname": "debian",
+      "tailscale_ip": "100.86.180.81",
+      "ssh_user": "root",
+      "auth_type": "password",
+      "os": "Debian GNU/Linux 13 (trixie)",
+      "cpu": "AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)",
+      "ram": "62 GiB",
+      "role": "Heavy Compute & VM Host (QEMU / Antigravity / AI Services)",
+      "ssh_command_example": "sshpass -p 'ST720p' ssh -o StrictHostKeyChecking=no root@100.86.180.81 '<cmd>'"
+    }
+  ],
+  "tailscale_topology": [
+    {
+      "hostname": "Matebook16-Deb",
+      "ip": "100.119.202.62",
+      "os": "linux",
+      "online": true,
+      "active": true
+    },
+    {
+      "hostname": "OPPO Find X7 Ultra",
+      "ip": "100.80.126.45",
+      "os": "android",
+      "online": true,
+      "active": false
+    },
+    {
+      "hostname": "Morion",
+      "ip": "100.118.206.35",
+      "os": "android",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "debian",
+      "ip": "100.86.180.81",
+      "os": "linux",
+      "online": true,
+      "active": true
+    },
+    {
+      "hostname": "debian-I",
+      "ip": "100.107.251.62",
+      "os": "linux",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "OPPO Find X7 Ultra",
+      "ip": "100.121.41.27",
+      "os": "android",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "tailscale-exit-node",
+      "ip": "100.120.217.125",
+      "os": "linux",
+      "online": true,
+      "active": false
+    },
+    {
+      "hostname": "MateBook16",
+      "ip": "100.93.48.76",
+      "os": "windows",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "S22 пользователя Lev",
+      "ip": "100.90.217.101",
+      "os": "android",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "cs-581403328302-default",
+      "ip": "100.98.54.97",
+      "os": "linux",
+      "online": true,
+      "active": false
+    },
+    {
+      "hostname": "OPPO Find X7 Ultra",
+      "ip": "100.106.101.75",
+      "os": "android",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "racknerd-5a24bf9",
+      "ip": "100.114.41.84",
+      "os": "linux",
+      "online": true,
+      "active": false
+    },
+    {
+      "hostname": "Matebook16-Deb",
+      "ip": "100.126.120.48",
+      "os": "linux",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "realme C35",
+      "ip": "100.111.96.7",
+      "os": "android",
+      "online": false,
+      "active": false
+    }
+  ]
+}
