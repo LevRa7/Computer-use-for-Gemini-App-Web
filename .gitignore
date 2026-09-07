@@ -1,4 +1,11 @@
+token.json
+webhook_secret.txt
+*.log
+*.jsonl
+live_logs/
+scratch_*
 __pycache__/
 *.pyc
 .pytest_cache/
-.venv/
+win11_screen.png
+.state/
