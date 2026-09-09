@@ -203,35 +203,30 @@ if ($Mode -eq "standalone") {
         try { $LocalUrl | clip.exe 2>$null; $Copied = $true } catch {}
     }
 
+    Clear-Host
+
+if ($Lang -eq "ru") {
     Write-Host ""
-    Write-Host "================================================================================" -ForegroundColor Green
-    if ($Lang -eq "ru") {
-        Write-Host " [OK] Локальный MCP-сервер успешно запущен!" -ForegroundColor Green
-        Write-Host "================================================================================" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-        Write-Host "  1. Откройте страницу приложений Gemini Spark:" -ForegroundColor Yellow
-        Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  2. Подключите ваш MCP-сервер:" -ForegroundColor Yellow
-        $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "(Выделите ссылку и скопируйте через Ctrl+C)" }
-        Print-McpBox "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):" $LocalUrl $copyMsg
-        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    } else {
-        Write-Host " [OK] Local MCP Server successfully started!" -ForegroundColor Green
-        Write-Host "================================================================================" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-        Write-Host "  1. Open Gemini Spark Apps in your browser:" -ForegroundColor Yellow
-        Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  2. Connect your MCP Server:" -ForegroundColor Yellow
-        $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "(Select link and press Ctrl+C to copy)" }
-        Print-McpBox "LOCAL MCP SERVER SSE ENDPOINT URL:" $LocalUrl $copyMsg
-        Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    }
-    Write-Host "================================================================================" -ForegroundColor Green
-    exit 0
+    $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "Скопируйте ссылку выше" }
+    Print-McpBox "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (СКОПИРУЙТЕ):" $LocalUrl $copyMsg
+    Write-Host ""
+    Write-Host " Куда вставлять ссылку в Google Gemini:" -ForegroundColor Yellow
+    Write-Host " 1. Откройте в браузере: https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " 2. Нажмите 'Добавить приложение' (Add app / Настройки MCP)"
+    Write-Host " 3. Вставьте скопированную ссылку в поле 'URL сервера' (Ctrl+V) и нажмите Подключить." -ForegroundColor White
+    Write-Host ""
+} else {
+    Write-Host ""
+    $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "Copy the URL above" }
+    Print-McpBox "LOCAL MCP SERVER URL (COPY THIS):" $LocalUrl $copyMsg
+    Write-Host ""
+    Write-Host " Where to paste this URL in Google Gemini:" -ForegroundColor Yellow
+    Write-Host " 1. Open in your browser: https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " 2. Click 'Add app' (or navigate to MCP settings)"
+    Write-Host " 3. Paste the URL into the 'Server URL' field (Ctrl+V) and click Connect." -ForegroundColor White
+    Write-Host ""
+}
+exit 0
 }
 
 # Gateway Tunnel Mode
@@ -295,51 +290,26 @@ WshShell.Run "python -m core.agent", 0, False
 # Launch now
 Start-Process python -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
 
-Write-Host ""
-Write-Host "================================================================================" -ForegroundColor Green
+Clear-Host
+
 if ($Lang -eq "ru") {
-    Write-Host " [OK] Antigravity Mesh узел успешно установлен и запущен!" -ForegroundColor Green
-    Write-Host "================================================================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  * Устройство:      $Hostname ($DetectedType)"
-    Write-Host "  * Субдомен:        $AssignedUser.$Gateway" -ForegroundColor Cyan
-    Write-Host "  * Секретный токен: $AssignedToken"
-    Write-Host "  * Автозапуск:      Включен (Windows Startup VBS)"
+    $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "Скопируйте ссылку выше" }
+    Print-McpBox "ССЫЛКА MCP-СЕРВЕРА ДЛЯ ПОДКЛЮЧЕНИЯ (СКОПИРУЙТЕ):" $SseUrl $copyMsg
     Write-Host ""
-    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  1. Откройте страницу приложений Gemini Spark в браузере:" -ForegroundColor Yellow
-    Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " Куда вставлять ссылку в Google Gemini:" -ForegroundColor Yellow
+    Write-Host " 1. Откройте в браузере: https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " 2. Нажмите 'Добавить приложение' (Add app / Настройки MCP)"
+    Write-Host " 3. Вставьте скопированную ссылку в поле 'URL сервера' (Ctrl+V) и нажмите Подключить." -ForegroundColor White
     Write-Host ""
-    Write-Host "  2. Подключите ваш персональный MCP-сервер:" -ForegroundColor Yellow
-    $copyMsg = if ($Copied) { "[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)" } else { "(Выделите ссылку и скопируйте через Ctrl+C)" }
-    Print-McpBox "ССЫЛКА MCP-СЕРВЕРА (SSE ENDPOINT):" $SseUrl $copyMsg
-    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  Инструкция подключения в Gemini Spark / AI Studio:"
-    Write-Host "  1. Перейдите по ссылке: https://gemini.google.com/spark/apps"
-    Write-Host "  2. Нажмите 'Add app' или перейдите в Настройки -> MCP"
-    Write-Host "  3. Вставьте скопированную ссылку (Ctrl+V) и нажмите Connect!"
 } else {
-    Write-Host " [OK] Antigravity Mesh node successfully installed and running!" -ForegroundColor Green
-    Write-Host "================================================================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  * Device:       $Hostname ($DetectedType)"
-    Write-Host "  * Subdomain:    $AssignedUser.$Gateway" -ForegroundColor Cyan
-    Write-Host "  * Secret Token: $AssignedToken"
-    Write-Host "  * Autostart:    Enabled (Windows Startup VBS)"
+    $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "Copy the URL above" }
+    Print-McpBox "MCP SERVER URL (COPY THIS):" $SseUrl $copyMsg
     Write-Host ""
-    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  1. Open Gemini Spark Apps in your browser:" -ForegroundColor Yellow
-    Write-Host "     https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " Where to paste this URL in Google Gemini:" -ForegroundColor Yellow
+    Write-Host " 1. Open in your browser: https://gemini.google.com/spark/apps" -ForegroundColor Cyan
+    Write-Host " 2. Click 'Add app' (or navigate to MCP settings)"
+    Write-Host " 3. Paste the URL into the 'Server URL' field (Ctrl+V) and click Connect." -ForegroundColor White
     Write-Host ""
-    Write-Host "  2. Connect your personal MCP Server:" -ForegroundColor Yellow
-    $copyMsg = if ($Copied) { "[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)" } else { "(Select link and press Ctrl+C to copy)" }
-    Print-McpBox "MCP SERVER SSE ENDPOINT URL:" $SseUrl $copyMsg
-    Write-Host "  ----------------------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  Connection Steps in Gemini Spark / AI Studio:"
-    Write-Host "  1. Open: https://gemini.google.com/spark/apps"
-    Write-Host "  2. Click 'Add app' or navigate to Tools / MCP configuration"
-    Write-Host "  3. Paste the URL (Ctrl+V) and click Connect!"
 }
-Write-Host "================================================================================" -ForegroundColor Green

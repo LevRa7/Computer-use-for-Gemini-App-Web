@@ -503,58 +503,39 @@ EOF
         printf "%s" "$MCP_LOCAL_URL" | clip.exe 2>/dev/null && COPIED=true
     fi
 
-    echo ""
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════════════════════════${RESET}"
+    clear 2>/dev/null || printf "[2J[H" || true
+
     if [ "$LANG_CHOICE" = "ru" ]; then
-        echo -e "${BOLD}${GREEN}🎉 Локальный Standalone MCP-сервер успешно запущен на этом ПК!${RESET}"
         echo ""
-        echo -e "  ⚙️  ${BOLD}Порт:${RESET}               ${PORT}"
-        echo -e "  🔄 ${BOLD}Автозапуск:${RESET}         Включен (фоновая служба)"
-        echo ""
-        echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
-        echo -e "  ${BOLD}1. Откройте страницу приложений Gemini Spark в браузере:${RESET}"
-        echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
-        echo ""
-        echo -e "  ${BOLD}2. Подключите ваш персональный MCP-сервер:${RESET}"
         local copy_msg=""
         if [ "$COPIED" = true ]; then
             copy_msg="[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)"
         else
-            copy_msg="[OK] Скопировано в буфер обмена (OSC 52) / или выделите и скопируйте"
+            copy_msg="Скопируйте ссылку выше"
         fi
-        print_mcp_box "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (SSE ENDPOINT):" "$MCP_LOCAL_URL" "$copy_msg"
-        echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
+        print_mcp_box "ССЫЛКА ЛОКАЛЬНОГО MCP-СЕРВЕРА (СКОПИРУЙТЕ):" "$MCP_LOCAL_URL" "$copy_msg"
         echo ""
-        echo -e "  ${BOLD}Шаги подключения в Google Gemini / Spark:${RESET}"
-        echo -e "  1. Перейдите по ссылке: ${CYAN}https://gemini.google.com/spark/apps${RESET}"
-        echo -e "  2. Нажмите ${BOLD}Add app / Добавить приложение${RESET} (или Настройки ➔ MCP)"
-        echo -e "  3. Вставьте скопированную ссылку (${BOLD}Ctrl+V${RESET}) и нажмите ${BOLD}Connect${RESET}!"
+        echo -e "  ${BOLD}Куда вставлять ссылку в Google Gemini:${RESET}"
+        echo -e "  1. Откройте в браузере: ${CYAN}https://gemini.google.com/spark/apps${RESET}"
+        echo -e "  2. Нажмите ${BOLD}'Добавить приложение'${RESET} (или 'Add app' в настройках MCP)"
+        echo -e "  3. Вставьте скопированную ссылку в поле ${BOLD}'URL сервера'${RESET} (${BOLD}Ctrl+V${RESET}) и нажмите ${BOLD}Подключить${RESET}."
+        echo ""
     else
-        echo -e "${BOLD}${GREEN}🎉 Local Standalone MCP Server successfully running on this machine!${RESET}"
         echo ""
-        echo -e "  ⚙️  ${BOLD}Port:${RESET}               ${PORT}"
-        echo -e "  🔄 ${BOLD}Autostart:${RESET}          Enabled (background service)"
-        echo ""
-        echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
-        echo -e "  ${BOLD}1. Open Gemini Spark Apps in your browser:${RESET}"
-        echo -e "     👉 ${CYAN}https://gemini.google.com/spark/apps${RESET}"
-        echo ""
-        echo -e "  ${BOLD}2. Connect your personal MCP Server:${RESET}"
         local copy_msg=""
         if [ "$COPIED" = true ]; then
             copy_msg="[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)"
         else
-            copy_msg="[OK] Copied to clipboard (OSC 52) / or select and copy"
+            copy_msg="Copy the URL above"
         fi
-        print_mcp_box "LOCAL MCP SERVER SSE ENDPOINT URL:" "$MCP_LOCAL_URL" "$copy_msg"
-        echo -e "  ${YELLOW}------------------------------------------------------------------------------${RESET}"
+        print_mcp_box "LOCAL MCP SERVER URL (COPY THIS):" "$MCP_LOCAL_URL" "$copy_msg"
         echo ""
-        echo -e "  ${BOLD}Connection Steps in Google Gemini / Spark:${RESET}"
-        echo -e "  1. Open: ${CYAN}https://gemini.google.com/spark/apps${RESET}"
-        echo -e "  2. Click ${BOLD}Add app${RESET} (or navigate to Settings ➔ Tools / MCP)"
-        echo -e "  3. Paste the URL (${BOLD}Ctrl+V${RESET}) and click ${BOLD}Connect${RESET}!"
+        echo -e "  ${BOLD}Where to paste this URL in Google Gemini:${RESET}"
+        echo -e "  1. Open in your browser: ${CYAN}https://gemini.google.com/spark/apps${RESET}"
+        echo -e "  2. Click ${BOLD}'Add app'${RESET} (or navigate to MCP settings)"
+        echo -e "  3. Paste the URL into the ${BOLD}'Server URL'${RESET} field (${BOLD}Ctrl+V${RESET}) and click ${BOLD}Connect${RESET}."
+        echo ""
     fi
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════════════════════════${RESET}"
     exit 0
 fi
 
