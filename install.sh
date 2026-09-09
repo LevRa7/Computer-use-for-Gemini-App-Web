@@ -27,9 +27,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
     mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
-    curl -fsSL "https://${GATEWAY}/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/core/__init__.py" -o "$BOOTSTRAP_DIR/core/__init__.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/skills/orchestrator.md" -o "$BOOTSTRAP_DIR/skills/orchestrator.md" 2>/dev/null || true
     SCRIPT_DIR="$BOOTSTRAP_DIR"
@@ -46,6 +46,51 @@ YELLOW="\033[1;33m"
 BLUE="\033[0;34m"
 MAGENTA="\033[0;35m"
 RESET="\033[0m"
+
+ensure_python() {
+    if command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+    [ "$LANG_CHOICE" = "ru" ] && echo -e "\033[1;33m[!] Python 3 не найден. Автоматическая установка системных пакетов...\033[0m" || echo -e "\033[1;33m[!] Python 3 not found. Installing system packages...\033[0m"
+    if command -v apt-get >/dev/null 2>&1; then
+        [ "$(id -u)" -eq 0 ] && apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv curl || sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-pip python3-venv curl
+    elif command -v dnf >/dev/null 2>&1; then
+        [ "$(id -u)" -eq 0 ] && dnf install -y -q python3 python3-pip curl || sudo dnf install -y -q python3 python3-pip curl
+    elif command -v yum >/dev/null 2>&1; then
+        [ "$(id -u)" -eq 0 ] && yum install -y -q python3 python3-pip curl || sudo yum install -y -q python3 python3-pip curl
+    elif command -v pacman >/dev/null 2>&1; then
+        [ "$(id -u)" -eq 0 ] && pacman -Sy --noconfirm python python-pip curl || sudo pacman -Sy --noconfirm python python-pip curl
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache python3 py3-pip curl
+    elif [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+        brew install python3
+    fi
+}
+
+ensure_dependencies() {
+    ensure_python
+    PYTHON_BIN="$(command -v python3 || echo "/usr/bin/python3")"
+    if ! "$PYTHON_BIN" -c "import websockets" 2>/dev/null; then
+        [ "$LANG_CHOICE" = "ru" ] && echo "[1/4] Автономная установка зависимостей (websockets)..." || echo "[1/4] Installing dependencies (websockets)..."
+        "$PYTHON_BIN" -m pip install websockets --break-system-packages 2>/dev/null || \
+        "$PYTHON_BIN" -m pip install websockets 2>/dev/null || {
+            mkdir -p "$CONFIG_DIR"
+            local VENV_DIR="$CONFIG_DIR/venv"
+            if ! "$PYTHON_BIN" -m venv "$VENV_DIR" 2>/dev/null; then
+                if command -v apt-get >/dev/null 2>&1; then
+                    [ "$(id -u)" -eq 0 ] && apt-get install -y -qq python3-venv 2>/dev/null || sudo apt-get install -y -qq python3-venv 2>/dev/null || true
+                    "$PYTHON_BIN" -m venv "$VENV_DIR" 2>/dev/null || true
+                fi
+            fi
+            if [ -f "$VENV_DIR/bin/pip" ]; then
+                "$VENV_DIR/bin/pip" install --quiet websockets
+                PYTHON_BIN="$VENV_DIR/bin/python3"
+            fi
+        }
+    fi
+    PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo "/usr/bin/python3")}"
+}
+
 
 # Parse CLI args
 while [[ $# -gt 0 ]]; do
@@ -368,6 +413,7 @@ if [ "$MODE" = "standalone" ]; then
         echo -e "\n${BOLD}${BLUE}=== Setting up Local Standalone FastMCP Server ===${RESET}"
         echo "[1/3] Checking Python environment..."
     fi
+    ensure_dependencies
     mkdir -p "$CONFIG_DIR"
 
     if [ "$LANG_CHOICE" = "ru" ]; then
@@ -417,7 +463,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
-ExecStart=/usr/bin/python3 -m core.server --port=$PORT
+ExecStart=$PYTHON_BIN -m core.server --port=$PORT
 Restart=always
 RestartSec=5
 
@@ -427,7 +473,7 @@ EOF
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable --now agy-standalone.service 2>/dev/null || {
             pkill -f "core.server" 2>/dev/null || true
-            nohup /usr/bin/python3 -m core.server --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
+            nohup $PYTHON_BIN -m core.server --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
         }
         loginctl enable-linger "$USER" 2>/dev/null || true
     fi
@@ -536,9 +582,7 @@ else
     echo "[1/4] Checking Python dependencies (websockets)..."
 fi
 
-python3 -c "import websockets" 2>/dev/null || {
-    python3 -m pip install websockets --break-system-packages 2>/dev/null || python3 -m pip install websockets
-}
+ensure_dependencies
 
 if [ "$LANG_CHOICE" = "ru" ]; then
     echo "[2/4] Регистрация субдомена '${USERNAME}' на шлюзе (${GATEWAY})..."
@@ -666,7 +710,7 @@ After=network.target
 Type=simple
 EnvironmentFile=$CONFIG_FILE
 WorkingDirectory=$SCRIPT_DIR
-ExecStart=/usr/bin/python3 -m core.agent
+ExecStart=$PYTHON_BIN -m core.agent
 Restart=always
 RestartSec=5
 
@@ -676,7 +720,7 @@ EOF
     systemctl --user daemon-reload 2>/dev/null || true
     systemctl --user enable --now agy-agent.service 2>/dev/null || {
         pkill -f "core.agent" 2>/dev/null || true
-        nohup /usr/bin/python3 -m core.agent > "$CONFIG_DIR/agent.log" 2>&1 &
+        nohup $PYTHON_BIN -m core.agent > "$CONFIG_DIR/agent.log" 2>&1 &
     }
     loginctl enable-linger "$USER" 2>/dev/null || true
 fi

@@ -57,8 +57,8 @@ npx gemini-computer-use
 
 ### 🛠️ Or clone via Git
 ```bash
-git clone https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE.git
-cd Gemini-APP-Web-for-computer-use---FREE
+git clone https://github.com/LevRa7/Computer-use-for-Gemini-App-Web.git
+cd Computer-use-for-Gemini-App-Web
 ./install.sh --quick
 ```
 
@@ -172,8 +172,8 @@ npx gemini-computer-use
 
 #### 🛠️ Либо вручную через Git:
 ```bash
-git clone https://github.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE.git
-cd Gemini-APP-Web-for-computer-use---FREE
+git clone https://github.com/LevRa7/Computer-use-for-Gemini-App-Web.git
+cd Computer-use-for-Gemini-App-Web
 ./install.sh --quick
 ```
 
