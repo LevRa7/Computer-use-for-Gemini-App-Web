@@ -92,12 +92,23 @@ if (-not $hasPython) {
             $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
         }
     } else {
-        if ($Lang -eq "ru") {
-            Write-Error "Python 3 не найден в PATH, и winget недоступен. Пожалуйста, установите Python с python.org."
-        } else {
-            Write-Error "Python 3 was not found in PATH, and winget is unavailable. Please install Python from python.org."
+        try {
+            if ($Lang -eq "ru") { Write-Host "[1/3] Загрузка официального установщика Python 3.12..." -ForegroundColor Yellow } else { Write-Host "[1/3] Downloading official Python 3.12 installer..." -ForegroundColor Yellow }
+            $pyInstaller = "$env:TEMP\python-3.12.5-amd64.exe"
+            Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.5/python-3.12.5-amd64.exe" -OutFile $pyInstaller -UseBasicParsing
+            Start-Process -FilePath $pyInstaller -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0" -Wait
+            $pyPaths = @("$env:LOCALAPPDATA\Programs\Python\Python312", "$env:ProgramFiles\Python312")
+            foreach ($p in $pyPaths) {
+                if (Test-Path "$p\python.exe") {
+                    $env:Path = "$p;$p\Scripts;$env:Path"
+                    $hasPython = $true
+                    break
+                }
+            }
+        } catch {
+            Write-Error "Python 3 auto-installation failed: $_"
+            exit 1
         }
-        exit 1
     }
 }
 
@@ -107,7 +118,7 @@ if ($Lang -eq "ru") {
 } else {
     Write-Host "[2/3] Checking dependencies (websockets)..." -ForegroundColor Yellow
 }
-python -m pip install websockets --quiet
+python -m pip install websockets --quiet 2>$null; if ($LASTEXITCODE -ne 0) { python -m ensurepip --default-pip 2>$null; python -m pip install websockets --quiet }
 
 $ConfigDir = "$env:USERPROFILE\.config\antigravity-mesh"
 if (!(Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
@@ -134,7 +145,7 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
             Invoke-WebRequest -Uri "https://$Gateway/$f" -OutFile $dest -UseBasicParsing -ErrorAction Stop
         } catch {
             try {
-                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/LevRa7/Gemini-APP-Web-for-computer-use---FREE/main/$f" -OutFile $dest -UseBasicParsing
+                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/$f" -OutFile $dest -UseBasicParsing
             } catch {}
         }
     }
