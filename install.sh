@@ -588,7 +588,23 @@ else
     REQ_TOKEN=""
 fi
 
-REG_BODY="{\"username\": \"${USERNAME}\", \"auto_suffix\": true"
+DETECTED_MAC=""
+if command -v python3 >/dev/null 2>&1; then
+    DETECTED_MAC=$(python3 -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>/dev/null || true)
+fi
+if [ -z "$DETECTED_MAC" ] || [ "$DETECTED_MAC" = "00:00:00:00:00:00" ]; then
+    for iface in /sys/class/net/*; do
+        if [ -f "$iface/address" ] && [ "$(cat "$iface/type" 2>/dev/null)" = "1" ]; then
+            addr=$(cat "$iface/address" 2>/dev/null)
+            if [ -n "$addr" ] && [ "$addr" != "00:00:00:00:00:00" ]; then
+                DETECTED_MAC="$addr"
+                break
+            fi
+        fi
+    done
+fi
+
+REG_BODY="{\"username\": \"${USERNAME}\", \"auto_suffix\": true, \"mac_address\": \"${DETECTED_MAC}\", \"os\": \"${DETECTED_OS}\""
 if [ -n "$REQ_TOKEN" ]; then
     REG_BODY="${REG_BODY}, \"token\": \"${REQ_TOKEN}\""
 fi
@@ -605,7 +621,7 @@ if [ -z "$ASSIGNED_TOKEN" ]; then
     FALLBACK_USER="${USERNAME}-$(date +%s | tail -c 4)"
     REG_RESP=$(curl -s -X POST "https://${GATEWAY}/api/register" \
         -H "Content-Type: application/json" \
-        -d "{\"username\": \"${FALLBACK_USER}\", \"auto_suffix\": true}")
+        -d "{\"username\": \"${FALLBACK_USER}\", \"auto_suffix\": true, \"mac_address\": \"${DETECTED_MAC}\", \"os\": \"${DETECTED_OS}\"}")
     ASSIGNED_USER=$(python3 -c "import json, sys; print(json.loads(sys.argv[1]).get('username', ''))" "$REG_RESP" 2>/dev/null || true)
     ASSIGNED_TOKEN=$(python3 -c "import json, sys; print(json.loads(sys.argv[1]).get('token', ''))" "$REG_RESP" 2>/dev/null || true)
 fi

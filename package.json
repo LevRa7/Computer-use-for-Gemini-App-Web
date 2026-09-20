@@ -1,6 +1,6 @@
 {
   "name": "gemini-computer-use",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Turn your PC, Laptop, or Server into an autonomous execution node for Google Gemini via Native MCP",
   "main": "bin/cli.js",
   "bin": {
