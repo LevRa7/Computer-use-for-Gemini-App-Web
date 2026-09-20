@@ -9,3 +9,6 @@ __pycache__/
 .pytest_cache/
 win11_screen.png
 .state/
+registry.json
+*.tar.gz
+gateway.py

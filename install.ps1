@@ -239,7 +239,31 @@ if ($Lang -eq "ru") {
 } else {
     Write-Host "[2/3] Registering subdomain '$User' on gateway ($Gateway)..." -ForegroundColor Yellow
 }
-$regPayload = @{ username = $User; auto_suffix = $true } | ConvertTo-Json
+$detectedMac = ""
+try {
+    $nic = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = 'TRUE'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($nic -and $nic.MACAddress) {
+        $detectedMac = $nic.MACAddress
+    }
+} catch {}
+if ([string]::IsNullOrWhiteSpace($detectedMac)) {
+    try {
+        $detectedMac = python -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>$null
+    } catch {}
+}
+
+$detectedOs = "Windows $([System.Environment]::OSVersion.Version.ToString())"
+
+$regPayloadObj = @{
+    username = $User
+    auto_suffix = $true
+    mac_address = $detectedMac
+    os = $detectedOs
+}
+if (-not [string]::IsNullOrWhiteSpace($Token)) {
+    $regPayloadObj.token = $Token
+}
+$regPayload = $regPayloadObj | ConvertTo-Json
 $response = Invoke-RestMethod -Uri "https://$Gateway/api/register" -Method Post -Body $regPayload -ContentType "application/json"
 
 $AssignedUser = $response.username
