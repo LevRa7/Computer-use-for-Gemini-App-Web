@@ -724,7 +724,7 @@ fi
 
 sleep 1
 
-MCP_URL="https://${ASSIGNED_USER}.${GATEWAY}/sse?token=${ASSIGNED_TOKEN}"
+MCP_URL="https://${GATEWAY}/sse?user=${ASSIGNED_USER}&token=${ASSIGNED_TOKEN}"
 
 # Quick Copy to Clipboard
 COPIED=false
