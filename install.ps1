@@ -18,7 +18,10 @@ try {
     $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {}
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+if (Test-Path variable:global:PSNativeCommandUseErrorActionPreference) {
+    $global:PSNativeCommandUseErrorActionPreference = $false
+}
 
 $Hostname = $env:COMPUTERNAME.ToLower() -replace '[^a-z0-9_-]', ''
 $IsLaptop = [bool](Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue)
@@ -118,7 +121,15 @@ if ($Lang -eq "ru") {
 } else {
     Write-Host "[2/3] Checking dependencies (websockets)..." -ForegroundColor Yellow
 }
-python -m pip install websockets --quiet 2>$null; if ($LASTEXITCODE -ne 0) { python -m ensurepip --default-pip 2>$null; python -m pip install websockets --quiet }
+try {
+    $null = python -m pip install websockets --quiet 2>&1
+} catch {}
+if ($LASTEXITCODE -ne 0) {
+    try {
+        $null = python -m ensurepip --default-pip 2>&1
+        $null = python -m pip install websockets --quiet 2>&1
+    } catch {}
+}
 
 $ConfigDir = "$env:USERPROFILE\.config\antigravity-mesh"
 if (!(Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
@@ -248,7 +259,10 @@ try {
 } catch {}
 if ([string]::IsNullOrWhiteSpace($detectedMac)) {
     try {
-        $detectedMac = python -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>$null
+        $res = python -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>&1
+        if ($LASTEXITCODE -eq 0 -and $res) {
+            $detectedMac = $res.ToString().Trim()
+        }
     } catch {}
 }
 
