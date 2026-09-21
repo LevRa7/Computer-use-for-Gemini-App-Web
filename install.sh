@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  Antigravity Mesh - Universal Turnkey Installer (v1.2.0)
+#  Antigravity Mesh - Universal Turnkey Installer (v0.1.2)
 #  Bilingual: English (Default) & Russian, Device Detection, SSH & Autostart
 # ==============================================================================
 set -e

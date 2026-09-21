@@ -9,6 +9,15 @@
   "scripts": {
     "start": "node ./bin/cli.js"
   },
+  "files": [
+    "bin",
+    "core",
+    "skills",
+    "install.sh",
+    "install.ps1",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "gemini",
     "mcp",
