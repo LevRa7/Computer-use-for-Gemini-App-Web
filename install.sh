@@ -507,7 +507,7 @@ EOF
 
     if [ "$LANG_CHOICE" = "ru" ]; then
         echo ""
-        local copy_msg=""
+        copy_msg=""
         if [ "$COPIED" = true ]; then
             copy_msg="[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)"
         else
@@ -522,7 +522,7 @@ EOF
         echo ""
     else
         echo ""
-        local copy_msg=""
+        copy_msg=""
         if [ "$COPIED" = true ]; then
             copy_msg="[OK] URL COPIED TO CLIPBOARD! (Press Ctrl+V to paste)"
         else
@@ -746,7 +746,7 @@ clear 2>/dev/null || printf "\033[2J\033[H" || true
 
 if [ "$LANG_CHOICE" = "ru" ]; then
     echo ""
-    local copy_msg=""
+    copy_msg=""
     if [ "$COPIED" = true ]; then
         copy_msg="[OK] ССЫЛКА СКОПИРОВАНА В БУФЕР ОБМЕНА! (Вставьте через Ctrl+V)"
     else
@@ -761,7 +761,7 @@ if [ "$LANG_CHOICE" = "ru" ]; then
     echo ""
 else
     echo ""
-    local copy_msg=""
+    copy_msg=""
     if [ "$COPIED" = true ]; then
         copy_msg="[OK] URL COPIED TO CLIPBOARD! (Paste with Ctrl+V)"
     else
