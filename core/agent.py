@@ -13,6 +13,7 @@ logger = logging.getLogger("agy-agent")
 GATEWAY_HOST = os.environ.get("MESH_GATEWAY", "smart-server.online")
 USER = os.environ.get("MESH_USER", "levra7")
 TOKEN = os.environ.get("MESH_TOKEN", "")
+DEFAULT_WORKSPACE = os.environ.get("MESH_WORKSPACE", os.getcwd())
 
 # 12,000 characters (~3000 tokens) maximum output per turn to keep Gemini chat context lightweight
 # and completely prevent Gemini Error 1076 (context/payload limit exhaustion)
@@ -45,6 +46,7 @@ def run_bash_sync(cmd: str, timeout: int = CMD_TIMEOUT_SEC) -> dict:
     try:
         proc = subprocess.run(
             ["bash", "-c", cmd],
+            cwd=DEFAULT_WORKSPACE if os.path.exists(DEFAULT_WORKSPACE) else None,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -70,14 +72,80 @@ def run_bash_sync(cmd: str, timeout: int = CMD_TIMEOUT_SEC) -> dict:
             "stderr": str(e)
         }
 
+def list_dir_sync(path: str = "") -> dict:
+    """Lists files and directories at path, defaulting to DEFAULT_WORKSPACE."""
+    try:
+        target = path.strip() if path else DEFAULT_WORKSPACE
+        target = os.path.expanduser(target)
+        if not os.path.isabs(target):
+            target = os.path.abspath(os.path.join(DEFAULT_WORKSPACE, target))
+        if not os.path.exists(target):
+            return {"exit_code": 1, "stdout": "", "stderr": f"Path not found: {target}"}
+        if os.path.isfile(target):
+            return read_file_sync(target)
+
+        entries = []
+        for e in sorted(os.scandir(target), key=lambda x: (not x.is_dir(), x.name.lower())):
+            suffix = "/" if e.is_dir() else ""
+            size = e.stat().st_size if e.is_file() else 0
+            entries.append(f"{e.name}{suffix}" + (f" ({size} bytes)" if e.is_file() else ""))
+
+        listing = "\n".join(entries) if entries else "(empty directory)"
+        return {
+            "exit_code": 0,
+            "stdout": f"Directory: {target} ({len(entries)} items):\n{listing}",
+            "stderr": ""
+        }
+    except Exception as e:
+        return {"exit_code": 1, "stdout": "", "stderr": str(e)}
+
+def read_file_sync(path: str, start_line: int = 1, end_line: int = None) -> dict:
+    """Reads lines from a file on disk."""
+    try:
+        target = path.strip()
+        target = os.path.expanduser(target)
+        if not os.path.isabs(target):
+            target = os.path.abspath(os.path.join(DEFAULT_WORKSPACE, target))
+        if not os.path.exists(target):
+            return {"exit_code": 1, "stdout": "", "stderr": f"File not found: {target}"}
+        if os.path.isdir(target):
+            return list_dir_sync(target)
+
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+
+        s = max(1, start_line or 1) - 1
+        e = min(len(lines), end_line) if end_line else len(lines)
+        selected = lines[s:e]
+        content = "".join(f"{idx+s+1:4d} | {line}" for idx, line in enumerate(selected))
+        header = f"File: {target} (lines {s+1}-{e} of {len(lines)} total)\n" + ("-" * 60) + "\n"
+        full = header + content
+        clean = truncate_output(sanitize_output(full))
+        return {
+            "exit_code": 0,
+            "stdout": clean,
+            "stderr": ""
+        }
+    except Exception as e:
+        return {"exit_code": 1, "stdout": "", "stderr": str(e)}
+
 async def handle_tool_call(name: str, args: dict) -> dict:
     if name == "system_vitals":
         return await asyncio.to_thread(get_host_vitals)
     elif name == "bash_exec":
         cmd = args.get("command", "")
         logger.info(f"Executing bash_exec: {cmd[:120]}...")
-        # Run in thread pool so WebSocket heartbeats (ping/pong) remain active
         return await asyncio.to_thread(run_bash_sync, cmd, CMD_TIMEOUT_SEC)
+    elif name == "list_dir":
+        path = args.get("path", "")
+        logger.info(f"Executing list_dir: {path}")
+        return await asyncio.to_thread(list_dir_sync, path)
+    elif name == "read_file":
+        path = args.get("path", "")
+        start_line = args.get("start_line", 1)
+        end_line = args.get("end_line")
+        logger.info(f"Executing read_file: {path}")
+        return await asyncio.to_thread(read_file_sync, path, start_line, end_line)
     return {"error": f"Unknown tool {name}"}
 
 async def run_agent():
