@@ -146,6 +146,7 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
     $files = @(
         "core/agent.py",
         "core/server.py",
+        "core/mcp_tools.py",
         "core/vitals.py",
         "core/__init__.py",
         "skills/orchestrator.md"

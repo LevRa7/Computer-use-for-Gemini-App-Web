@@ -29,6 +29,7 @@ if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
     curl -fsSL "https://${GATEWAY}/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || true
+    curl -fsSL "https://${GATEWAY}/core/mcp_tools.py" -o "$BOOTSTRAP_DIR/core/mcp_tools.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/mcp_tools.py" -o "$BOOTSTRAP_DIR/core/mcp_tools.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/core/__init__.py" -o "$BOOTSTRAP_DIR/core/__init__.py" 2>/dev/null || true
     curl -fsSL "https://${GATEWAY}/skills/orchestrator.md" -o "$BOOTSTRAP_DIR/skills/orchestrator.md" 2>/dev/null || true
