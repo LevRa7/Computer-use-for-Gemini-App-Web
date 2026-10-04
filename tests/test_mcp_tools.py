@@ -434,3 +434,22 @@ def test_server_exposes_all_tools_and_jsonrpc_list():
     assert status == 200
     payload = json.loads(response["result"]["content"][0]["text"])
     assert isinstance(payload["jobs"], list)
+
+
+def test_glob_find_patterns_with_separators_are_deduplicated(tmp_path):
+    """Patterns mixing '/' and '**' must not report the same file twice."""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "deep").mkdir()
+    (tmp_path / "a.py").write_text("a")
+    (tmp_path / "sub" / "b.py").write_text("b")
+    (tmp_path / "sub" / "deep" / "c.py").write_text("c")
+
+    for pattern, expected in (("**/**/*.py", 3), ("**/*.py", 3), ("sub/**/*.py", 2)):
+        result = mcp_tools.call_tool("glob_find", {"pattern": pattern, "path": str(tmp_path)})
+        files = result["files"]
+        assert len(files) == len(set(files)), (pattern, files)
+        assert len(files) == expected, (pattern, files)
+
+    # Patterns with a separator used to return nothing at all.
+    assert len(mcp_tools.call_tool("glob_find", {"pattern": "sub/*.py", "path": str(tmp_path)})["files"]) == 2
+    assert len(mcp_tools.call_tool("glob_find", {"pattern": "sub/b.py", "path": str(tmp_path)})["files"]) == 1
