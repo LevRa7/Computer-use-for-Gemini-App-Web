@@ -417,7 +417,12 @@ def _tool_list_dir(args: Dict[str, Any]) -> Dict[str, Any]:
         raw = args.get("path", "") or ""
         target = _resolve(raw)
         if not os.path.exists(target):
-            return {"exit_code": 1, "stdout": "", "stderr": "Path not found: %s" % target}
+            return {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": ("[TOOL ERROR] Path not found: %s -- this path does NOT exist. "
+                           "Never report it as real; check the parent directory first." % target),
+            }
         if os.path.isfile(target):
             return _tool_read_file({"path": target})
 
@@ -432,7 +437,9 @@ def _tool_list_dir(args: Dict[str, Any]) -> Dict[str, Any]:
         listing = "\n".join(entries) if entries else "(empty directory)"
         return {
             "exit_code": 0,
-            "stdout": "Directory: %s (%d items):\n%s" % (target, len(entries), listing),
+            # [VERIFIED BY TOOL] tells the model this listing came from the real
+            # filesystem in this call: only such data may be reported as fact.
+            "stdout": "[VERIFIED BY TOOL] Directory: %s (%d items):\n%s" % (target, len(entries), listing),
             "stderr": "",
         }
     except Exception as exc:
@@ -523,7 +530,7 @@ def _tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"error": "path is required"}
         target = _resolve(path)
         if not os.path.exists(target):
-            return {"error": "File not found: %s" % target}
+            return {"error": "[TOOL ERROR] File not found: %s -- does not exist, do not report it as real." % target}
         if os.path.isdir(target):
             return _tool_list_dir({"path": target})
 
@@ -538,7 +545,7 @@ def _tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
         content = "".join(
             "%*d | %s" % (width, idx + start_line, line) for idx, line in enumerate(selected)
         )
-        header = "File: %s (lines %d-%d of %d total)\n%s\n" % (
+        header = "[VERIFIED BY TOOL] File: %s (lines %d-%d of %d total)\n%s\n" % (
             target,
             start_line,
             end,
@@ -624,7 +631,7 @@ def _tool_edit_file(args: Dict[str, Any]) -> Dict[str, Any]:
         if guard:
             return {"error": guard}
         if not os.path.isfile(target):
-            return {"error": "File not found: %s" % target}
+            return {"error": "[TOOL ERROR] File not found: %s -- does not exist, do not report it as real." % target}
 
         with open(target, "rb") as handle:
             raw = handle.read()
@@ -758,7 +765,8 @@ def _tool_grep_search(args: Dict[str, Any]) -> Dict[str, Any]:
             if truncated:
                 break
 
-        return {"matches": matches, "count": len(matches), "truncated": truncated}
+        return {"matches": matches, "count": len(matches), "truncated": truncated,
+                "note": "[VERIFIED BY TOOL] matches come from the real filesystem"}
     except Exception as exc:
         return {"error": "grep_search failed: %s" % exc}
 
@@ -804,7 +812,8 @@ def _tool_glob_find(args: Dict[str, Any]) -> Dict[str, Any]:
         truncated = len(files) > GLOB_MAX_RESULTS
         if truncated:
             files = files[:GLOB_MAX_RESULTS]
-        return {"files": files, "count": len(files), "truncated": truncated}
+        return {"files": files, "count": len(files), "truncated": truncated,
+                "note": "[VERIFIED BY TOOL] paths come from the real filesystem"}
     except Exception as exc:
         return {"error": "glob_find failed: %s" % exc}
 
