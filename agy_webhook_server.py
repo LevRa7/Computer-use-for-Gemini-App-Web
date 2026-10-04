@@ -27,6 +27,7 @@ SECRET_FILE = os.path.join(BASE_DIR, "webhook_secret.txt")
 LOG_FILE = os.path.join(BASE_DIR, "webhook_server.log")
 HISTORY_FILE = os.path.join(BASE_DIR, "webhook_history.json")
 AGY_BIN = "/root/.local/bin/agy"
+MATEBOOK_PASS = os.environ.get("MATEBOOK_PASS", "")  # never hardcode: set in the service environment
 
 logging.basicConfig(
     level=logging.INFO,
@@ -175,9 +176,11 @@ def get_system_metrics() -> dict:
 
 
 def get_matebook_vitals() -> dict:
+    if not MATEBOOK_PASS:
+        return {"error": "MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."}
     t0 = time.time()
     ssh_cmd = [
-        "sshpass", "-p", "***REMOVED***",
+        "sshpass", "-p", MATEBOOK_PASS,
         "ssh",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",

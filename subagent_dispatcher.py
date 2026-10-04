@@ -35,7 +35,7 @@ logger = logging.getLogger("subagent_dispatcher")
 AGY_BIN = "/root/.local/bin/agy"
 MATEBOOK_IP = "100.64.0.10"
 MATEBOOK_USER = "lev"
-MATEBOOK_PASS = "***REMOVED***"
+MATEBOOK_PASS = os.environ.get("MATEBOOK_PASS", "")  # never hardcode: set in the service environment
 
 # Subagent Tasks Storage
 tasks_lock = threading.Lock()
@@ -100,6 +100,18 @@ def run_matebook_subagent(prompt_or_cmd: str, model: str = "gemini-3.1-pro-high"
     """Runs a development / test / coding task on workstation via Tailscale SSH."""
     t0 = time.time()
     logger.info(f"Spawning workstation Dev Subagent: {prompt_or_cmd[:80]}...")
+
+    if not MATEBOOK_PASS:
+        return {
+            "status": "error",
+            "target": "matebook",
+            "role": "coder",
+            "model": model,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "MATEBOOK_PASS environment variable is not set (hardcoded credentials removed).",
+            "duration_seconds": round(time.time() - t0, 2),
+        }
 
     path_prefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; '
     
