@@ -234,8 +234,10 @@ def get_coordinator_vitals() -> "NodeVitals":
 # importing it, because core.agent imports websockets at module import time).
 # ---------------------------------------------------------------------------
 
-# ~3000 tokens per turn, keeps MCP payloads small for remote AI clients.
-MAX_OUTPUT_CHARS = 12000
+# Chunk size for one response. Larger than before (12000) so ordinary command
+# output arrives whole; anything bigger is paginated via next_cursor rather than
+# silently truncated, and very large output is spooled to a file on the node.
+MAX_OUTPUT_CHARS = 50000
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 

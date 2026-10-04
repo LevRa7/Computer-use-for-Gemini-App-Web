@@ -56,7 +56,7 @@ except Exception:  # pragma: no cover
 # Configuration / module state
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MAX_OUTPUT_CHARS = 12000
+_DEFAULT_MAX_OUTPUT_CHARS = 50000
 _DEFAULT_JOBS_DIR = os.path.join("~", ".cache", "antigravity-mesh", "jobs")
 
 #: bash_exec never blocks a transport thread for longer than this.
@@ -68,7 +68,7 @@ MAX_RUNNING_JOBS = 32
 #: Per-job output written to disk before a marker is appended and growth stops.
 JOB_OUTPUT_CAP = 64 * 1024 * 1024
 #: bash_exec spools its complete output to disk above this size.
-SPOOL_THRESHOLD = 256 * 1024
+SPOOL_THRESHOLD = 2 * 1024 * 1024
 #: Hard ceiling for glob_find result sets.
 GLOB_MAX_RESULTS = 10000
 
