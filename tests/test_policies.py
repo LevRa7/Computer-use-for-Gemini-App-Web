@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
+pytest.importorskip("google.antigravity")  # private SDK: skip, never a collection ERROR
 from google.antigravity import types
 from google.antigravity.hooks import policy
 

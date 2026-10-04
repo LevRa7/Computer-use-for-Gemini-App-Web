@@ -1,4 +1,5 @@
 import pytest
+pytest.importorskip("google.antigravity")  # private SDK: skip, never a collection ERROR
 from google.antigravity import types
 
 def test_mesh_subagents_defined():

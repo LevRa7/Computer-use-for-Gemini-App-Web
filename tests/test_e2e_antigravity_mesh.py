@@ -1,5 +1,6 @@
 import pytest
 import uuid
+pytest.importorskip("google.antigravity")  # private SDK: skip, never a collection ERROR
 from google.antigravity import types
 from core.schemas import NodeVitals
 from core.server import get_coordinator_vitals

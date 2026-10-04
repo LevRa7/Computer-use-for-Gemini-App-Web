@@ -1,6 +1,7 @@
 import pytest
 import os
 import json
+pytest.importorskip("google.antigravity")  # private SDK: skip, never a collection ERROR
 from google.antigravity import types
 
 @pytest.mark.asyncio
