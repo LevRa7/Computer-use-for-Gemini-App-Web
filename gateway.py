@@ -245,7 +245,9 @@ async def api_register(request: Request):
                     "sse_url": f"https://smart-server.online/sse?user={u}&token={token}",
                     "tunnel_url": f"wss://smart-server.online/ws/tunnel?user={u}&token={token}",
                     "reused": True,
-                    "instructions": f"Reused existing subdomain '{u}' for this device."
+                    "instructions": f"Antigravity Mesh node '{user}'. Direct access to the real remote host over a reverse tunnel. "
+                f"Do not guess paths or outputs: use list_dir/glob_find/grep_search/read_file/bash_exec/"
+                f"system_vitals. Use run_job for slow commands; page output with max_chars+cursor."
                 })
 
     # 2. If not found by MAC, check if username already exists in registry
@@ -447,15 +449,13 @@ async def messages_endpoint(request: Request):
                 "version": "1.0.0"
             },
             "instructions": (
-                f"Antigravity Mesh Node '{user}'. You are connected directly to the remote execution node via secure reverse tunnel. "
-                f"CRITICAL GROUNDING DIRECTIVE: You DO NOT possess internal knowledge of the remote filesystem. "
-                f"NEVER guess, speculate, or hallucinate file paths or directory contents. "
-                f"You MUST inspect reality with the provided MCP tools before claiming anything: `list_dir`, `glob_find` and `grep_search` to locate files, "
-                f"`read_file` to read them, `write_file` and `edit_file` to create or modify them, `bash_exec` for short commands, and `system_vitals` for host metrics. "
-                f"GROUNDING RULE: only create or edit a path you have first confirmed (or whose parent you verified with `list_dir`/`glob_find`) - never invent paths. "
-                f"For anything long-running (builds, installs, test suites, downloads, servers) use `run_job` instead of `bash_exec` so the call does not time out, "
-                f"then poll with `job_output` (optional wait_ms up to 20000) and stop it with `job_kill`; `job_list` shows recent jobs. "
-                f"Long outputs are paginated: when a result reports `next_cursor`, fetch the continuation by passing `cursor=<next_cursor>` (optionally with `max_chars`) instead of re-running the command."
+                (
+                f"Antigravity Mesh node '{user}' - direct access to the real host over a reverse tunnel. "
+                f"Never guess paths, files or outputs: inspect with list_dir, glob_find, grep_search, "
+                f"read_file, bash_exec, system_vitals. Only touch paths you have confirmed. "
+                f"For slow work (builds, installs, tests, downloads) use run_job, then job_output / "
+                f"job_kill / job_list. Long output is paged: pass cursor=<next_cursor> to continue."
+            )
             )
         }
     elif method == "notifications/initialized":
@@ -477,9 +477,7 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "list_dir",
                     "description": (
-                        "List files and folders at the specified directory on the host machine. "
-                        "Defaults to the current working directory of the node agent if path is omitted. "
-                        "MANDATORY: Use this tool to inspect directory contents and locate files without guessing."
+                        "List a directory on the remote host (default: workspace)."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -495,15 +493,14 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "read_file",
                     "description": (
-                        "Read the contents of a file on the host machine. "
-                        "Path can be absolute or relative to the agent's working directory."
+                        "Read a file, line-numbered. Page with max_chars/cursor."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "path": {"type": "string", "description": "File path to read"},
-                            "start_line": {"type": "integer", "description": "1-based starting line number"},
-                            "end_line": {"type": "integer", "description": "1-based ending line number"}
+                            "start_line": {"type": "integer", "description": "First line (1-based)"},
+                            "end_line": {"type": "integer", "description": "Last line (1-based)"}
                         },
                         "required": ["path"]
                     }
@@ -533,24 +530,21 @@ async def messages_endpoint(request: Request):
                 },
                 {
                     "name": "get_orchestration_skill",
-                    "description": "Load host environment layout, workspace mapping, and orchestration rules",
+                    "description": "Load the node orchestration rules.",
                     "inputSchema": {"type": "object", "properties": {}, "required": []}
                 },
                 {
                     "name": "write_file",
                     "description": (
-                        "Create or overwrite a file on the remote host with exact content. "
-                        "The write is atomic (temp file + os.replace) and parent directories are created by default. "
-                        "Returns the absolute path, byte count and sha256. "
-                        "Use this instead of bash_exec heredocs/echo redirection to create files."
+                        "Write a file atomically (creates parent dirs)."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "path": {"type": "string", "description": "Absolute path, or relative to the agent's workspace"},
                             "content": {"type": "string", "description": "Exact file content to write"},
-                            "create_dirs": {"type": "boolean", "description": "Create missing parent directories (default true)"},
-                            "mode": {"type": "string", "description": "Optional octal permissions, e.g. \"0644\" or \"0755\""}
+                            "create_dirs": {"type": "boolean", "description": "Create parent directories"},
+                            "mode": {"type": "string", "description": "File mode, e.g. 0644"}
                         },
                         "required": ["path", "content"]
                     }
@@ -558,10 +552,7 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "edit_file",
                     "description": (
-                        "Apply a surgical, exact (NON-regex) string replacement inside an existing file on the remote host. "
-                        "old_string must occur exactly once unless replace_all is true; otherwise the call fails. "
-                        "Pass expected_sha256 (from a previous read_file/write_file) to refuse to overwrite a file that changed since you read it. "
-                        "Prefer this over rewriting a whole file."
+                        "Replace an exact string in a file; old_string must be unique."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -569,8 +560,8 @@ async def messages_endpoint(request: Request):
                             "path": {"type": "string", "description": "File to edit"},
                             "old_string": {"type": "string", "description": "Exact text to replace (not a regex); must be unique unless replace_all is true"},
                             "new_string": {"type": "string", "description": "Replacement text"},
-                            "expected_sha256": {"type": "string", "description": "Optional guard: fail if the current file sha256 differs"},
-                            "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring a unique match (default false)"}
+                            "expected_sha256": {"type": "string", "description": "Fail if file changed since read"},
+                            "replace_all": {"type": "boolean", "description": "Replace every occurrence"}
                         },
                         "required": ["path", "old_string", "new_string"]
                     }
@@ -578,21 +569,18 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "grep_search",
                     "description": (
-                        "Recursively search file CONTENTS under a directory on the remote host and return matches as path:line: text. "
-                        "Skips binary files and heavy directories (.git, node_modules, __pycache__, .venv, venv). "
-                        "Use this to locate real code instead of guessing paths. "
-                        "Results are capped by limit; when the response is truncated, narrow the pattern or re-run with a higher limit."
+                        "Recursively search file contents; returns path:line: text."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "pattern": {"type": "string", "description": "Text or regular expression to search for"},
                             "path": {"type": "string", "description": "Directory to search recursively (default \".\")"},
-                            "glob": {"type": "string", "description": "Optional filename filter, e.g. \"*.py\""},
-                            "limit": {"type": "integer", "description": "Maximum matches to return (1..1000, default 200)"},
-                            "ignore_case": {"type": "boolean", "description": "Case-insensitive search (default false)"},
-                            "fixed": {"type": "boolean", "description": "Treat pattern as a literal string instead of a regex (default false)"},
-                            "context": {"type": "integer", "description": "Number of surrounding lines to include (default 0)"}
+                            "glob": {"type": "string", "description": "Filename filter"},
+                            "limit": {"type": "integer", "description": "Max results"},
+                            "ignore_case": {"type": "boolean", "description": "Case-insensitive"},
+                            "fixed": {"type": "boolean", "description": "Literal text, not regex"},
+                            "context": {"type": "integer", "description": "Context lines"}
                         },
                         "required": ["pattern"]
                     }
@@ -600,9 +588,7 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "glob_find",
                     "description": (
-                        "Find files by glob pattern (* and ** supported) under a directory on the remote host. "
-                        "Use this to discover REAL paths before reading or editing them; never invent file paths. "
-                        "Returns a list of absolute paths."
+                        "Find files by glob pattern (* and **)."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -616,10 +602,7 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "run_job",
                     "description": (
-                        "Start a command in the BACKGROUND (Popen, does not wait) and return immediately with a job_id and pid. "
-                        "USE THIS for anything that may take more than ~20 seconds — builds, installs, test suites, downloads, servers, long scans. "
-                        "Do NOT run such work via bash_exec: the gateway call has a 28s limit and would time out. "
-                        "Poll progress with job_output and stop it with job_kill."
+                        "Start a long command in the background; returns job_id."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -633,25 +616,22 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "job_output",
                     "description": (
-                        "Fetch status and a chunk of stdout/stderr for a background job started with run_job. "
-                        "wait_ms (max 20000) optionally blocks until the job finishes. "
-                        "If the response reports next_cursor, call job_output again passing cursor=<next_cursor> to read the continuation; "
-                        "max_chars controls the chunk size."
+                        "Get a job status/output. wait_ms<=20000; page via next_cursor."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "job_id": {"type": "string", "description": "Job id returned by run_job"},
-                            "wait_ms": {"type": "integer", "description": "Wait up to this many ms for completion (0..20000; above 20000 is clamped)"},
-                            "max_chars": {"type": "integer", "description": "Maximum characters of stdout to return"},
-                            "cursor": {"type": "integer", "description": "Offset into stdout; pass next_cursor from the previous call to continue"}
+                            "wait_ms": {"type": "integer", "description": "Block up to this long (max 20000)"},
+                            "max_chars": {"type": "integer", "description": "Chunk size"},
+                            "cursor": {"type": "integer", "description": "Offset to continue from"}
                         },
                         "required": ["job_id"]
                     }
                 },
                 {
                     "name": "job_kill",
-                    "description": "Stop a background job previously started with run_job. Optional signal (default TERM). Returns the resulting status.",
+                    "description": "Stop a running job.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -663,7 +643,7 @@ async def messages_endpoint(request: Request):
                 },
                 {
                     "name": "job_list",
-                    "description": "List recent background jobs (newest first, up to 50) with id, command, status, exit_code, duration and start time.",
+                    "description": "List recent jobs, newest first.",
                     "inputSchema": {"type": "object", "properties": {}, "required": []}
                 }
             ]
@@ -849,12 +829,20 @@ async def messages_endpoint(request: Request):
                 }
             )
 
-        # Truncation safety net in gateway to protect Gemini Web turn budget
-        if len(content_text) > 15000:
-            head_part = content_text[:10000]
-            tail_part = content_text[-3000:]
-            omitted = len(content_text) - 13000
-            content_text = f"{head_part}\n\n... [Output truncated: {omitted} chars omitted to prevent Gemini context overflow Error 1076] ...\n\n{tail_part}"
+        # Size guard for the Gemini Web turn budget. The node already paginates
+        # via next_cursor, so the gateway must NOT cut the middle out: that would
+        # break byte-exact continuation. Keep the head and say how to get the
+        # rest, so the model can ask for the next page instead of losing data.
+        MAX_GATEWAY_TEXT = 45000
+        if len(content_text) > MAX_GATEWAY_TEXT:
+            kept = content_text[:MAX_GATEWAY_TEXT]
+            omitted = len(content_text) - MAX_GATEWAY_TEXT
+            content_text = (
+                f"{kept}\n\n... [Output truncated by the gateway: {omitted} more characters. "
+                f"Do not re-run the command; the node can page the rest: call the same tool again "
+                f"with cursor=<next_cursor> and a larger max_chars, or read the saved file if the "
+                f"result reported one.] ..."
+            )
 
         resp["result"] = {
             "content": [{"type": "text", "text": content_text}],

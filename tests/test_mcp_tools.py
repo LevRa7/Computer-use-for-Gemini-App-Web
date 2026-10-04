@@ -222,14 +222,42 @@ def test_bash_exec_pagination_has_no_gaps():
 
 
 def test_bash_exec_spools_large_output(tmp_path):
+    # The spool threshold is 2 MiB, so the test output must exceed it; below the
+    # threshold the whole chunk is paginated in-memory and saved_to stays None.
+    size = mcp_tools.SPOOL_THRESHOLD + 100_000
     result = mcp_tools.call_tool(
-        "bash_exec", {"command": "python3 -c \"print('Y' * 300000)\"", "max_chars": 100}
+        "bash_exec",
+        {"command": "python3 -c \"print('Y' * %d)\"" % size, "max_chars": 100},
     )
     assert result["truncated"] is True
-    assert result["saved_to"]
+    assert result["saved_to"], "output above the spool threshold must be saved to a file"
     assert os.path.isfile(result["saved_to"])
     with open(result["saved_to"], "r", encoding="utf-8") as handle:
-        assert len(handle.read()) == 300001
+        assert len(handle.read()) == size + 1
+
+
+def test_bash_exec_below_spool_threshold_is_paginated_not_spooled():
+    # Just below the threshold: pagination must still reach the end without loss.
+    size = mcp_tools.SPOOL_THRESHOLD - 100_000
+    first = mcp_tools.call_tool(
+        "bash_exec",
+        {"command": "python3 -c \"print('Z' * %d)\"" % size, "max_chars": 50000},
+    )
+    assert first["saved_to"] is None
+    assert first["truncated"] is True
+    collected = first["stdout"]
+    cursor = first["next_cursor"]
+    guard = 0
+    while cursor is not None and guard < 200:
+        page = mcp_tools.call_tool(
+            "bash_exec",
+            {"command": "python3 -c \"print('Z' * %d)\"" % size,
+             "max_chars": 50000, "cursor": cursor},
+        )
+        collected += page["stdout"]
+        cursor = page["next_cursor"]
+        guard += 1
+    assert len(collected.replace("\n", "")) == size
 
 
 def test_bash_exec_timeout_is_clamped_and_reported():
