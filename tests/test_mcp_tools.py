@@ -250,7 +250,9 @@ def test_read_file_pagination_reaches_the_end(tmp_path):
     assert first["exit_code"] == 0
     assert first["truncated"] is True
     assert isinstance(first["next_cursor"], int)
-    assert "cursor=" in first["stdout"]
+    # Pages must stay byte-exact: no marker is injected into the content, the
+    # client follows next_cursor instead (a marker would break stitching).
+    assert "cursor=" not in first["stdout"]
 
     collected = first["stdout"]
     cursor = first["next_cursor"]

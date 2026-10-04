@@ -690,6 +690,8 @@ class StandaloneMCPHandler(BaseHTTPRequestHandler):
         except Exception:
             query = {}
         token = query.get("token", [None])[0]
+        if not token:
+            token = self.headers.get("X-Mesh-Token") or None
         if token:
             return str(token)
         auth = self.headers.get("Authorization", "") or ""
