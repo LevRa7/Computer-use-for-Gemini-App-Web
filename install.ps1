@@ -53,20 +53,41 @@ if ($DryRun) {
     exit 0
 }
 
-# Python check & auto-install
+# Python check & auto-install.
+# Windows ships a "python.exe" App Execution Alias that opens the Microsoft Store
+# instead of running Python, so "python --version" can look successful while doing
+# nothing. Resolve a real interpreter once and pin its full path in $PyExe.
 $hasPython = $false
-try {
-    $pyVer = python --version 2>&1
-    if ($LASTEXITCODE -eq 0 -or $pyVer -match "Python 3") {
-        if ($Lang -eq "ru") {
-            Write-Host "[1/3] Python обнаружен: $pyVer" -ForegroundColor Green
-        } else {
-            Write-Host "[1/3] Python detected: $pyVer" -ForegroundColor Green
+$PyExe = $null
+$candidates = @()
+$cmdPython = Get-Command python -ErrorAction SilentlyContinue
+if ($cmdPython) { $candidates += $cmdPython.Source }
+$candidates += @(
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+    "$env:ProgramFiles\Python312\python.exe",
+    "$env:ProgramFiles\Python311\python.exe"
+)
+$cmdPy = Get-Command py -ErrorAction SilentlyContinue
+if ($cmdPy) { $candidates += $cmdPy.Source }
+
+foreach ($cand in $candidates) {
+    if (-not $cand -or -not (Test-Path $cand)) { continue }
+    try {
+        # Require a working sys import, not just a zero exit code.
+        $probe = & $cand -c "import sys; print(sys.version_info[0])" 2>&1
+        if ($LASTEXITCODE -eq 0 -and "$probe".Trim() -eq "3") {
+            if ((Split-Path $cand -Leaf) -eq "py.exe") { $PyExe = "$cand -3" } else { $PyExe = $cand }
+            $pyVer = & $cand --version 2>&1
+            if ($Lang -eq "ru") {
+                Write-Host "[1/3] Python обнаружен: $pyVer" -ForegroundColor Green
+            } else {
+                Write-Host "[1/3] Python detected: $pyVer" -ForegroundColor Green
+            }
+            $hasPython = $true
+            break
         }
-        $hasPython = $true
-    }
-} catch {
-    $hasPython = $false
+    } catch { continue }
 }
 
 if (-not $hasPython) {
@@ -115,21 +136,47 @@ if (-not $hasPython) {
     }
 }
 
-# Install dependencies
-if ($Lang -eq "ru") {
-    Write-Host "[2/3] Проверка библиотек (websockets)..." -ForegroundColor Yellow
-} else {
-    Write-Host "[2/3] Checking dependencies (websockets)..." -ForegroundColor Yellow
-}
-try {
-    $null = python -m pip install websockets --quiet 2>&1
-} catch {}
-if ($LASTEXITCODE -ne 0) {
-    try {
-        $null = python -m ensurepip --default-pip 2>&1
-        $null = python -m pip install websockets --quiet 2>&1
-    } catch {}
-}
+    # Install dependencies.
+    # The tunnel agent needs "websockets"; core/mcp_tools.py and core/server.py
+    # are standard library only, so this is the single external requirement.
+    if ($Lang -eq "ru") {
+        Write-Host "[2/3] Проверка библиотек (websockets)..." -ForegroundColor Yellow
+    } else {
+        Write-Host "[2/3] Checking dependencies (websockets)..." -ForegroundColor Yellow
+    }
+
+    # Use the interpreter resolved above; fall back to PATH only if that failed.
+    $pyRun = if ($PyExe) { $PyExe } else { "python" }
+    $pyExeOnly = ($pyRun -split " ")[0]
+
+    # Upgrading pip first avoids the "old pip cannot build wheels" failure common
+    # on a fresh Python installation.
+    & $pyExeOnly -c "import websockets" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & $pyExeOnly -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | Out-Null
+        & $pyExeOnly -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & $pyExeOnly -m ensurepip --default-pip 2>&1 | Out-Null
+            & $pyExeOnly -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
+        }
+    }
+
+    & $pyExeOnly -c "import websockets" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        if ($Lang -eq "ru") {
+            Write-Host "[!] Не удалось установить websockets автоматически." -ForegroundColor Red
+            Write-Host "    Выполните вручную: $pyExeOnly -m pip install websockets" -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] Could not install websockets automatically." -ForegroundColor Red
+            Write-Host "    Run manually: $pyExeOnly -m pip install websockets" -ForegroundColor Yellow
+        }
+        exit 1
+    }
+    if ($Lang -eq "ru") {
+        Write-Host "[OK] websockets установлен." -ForegroundColor Green
+    } else {
+        Write-Host "[OK] websockets is installed." -ForegroundColor Green
+    }
 
 $ConfigDir = "$env:USERPROFILE\.config\antigravity-mesh"
 if (!(Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
@@ -205,7 +252,7 @@ if ($Mode -eq "standalone") {
     } else {
         Write-Host "=== Starting in Local Standalone Mode on port $Port ===" -ForegroundColor Blue
     }
-    Start-Process python -ArgumentList "-m core.server --port=$Port" -WorkingDirectory $ScriptDir -WindowStyle Hidden
+    Start-Process $pyExeOnly -ArgumentList "-m core.server --host 127.0.0.1 --port=$Port" -WorkingDirectory $ScriptDir -WindowStyle Hidden
     $LocalUrl = "http://localhost:$Port/sse"
     $Copied = $false
     try {
@@ -314,20 +361,25 @@ $env:MESH_GATEWAY = $Gateway
 $env:MESH_USER = $AssignedUser
 $env:MESH_TOKEN = $AssignedToken
 
-# Create Windows Startup launcher for persistent autostart
-$startupDir = [Environment]::GetFolderPath("Startup")
-$startupVbs = "$startupDir\antigravity-agent.vbs"
-@"
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.Environment("PROCESS")("MESH_GATEWAY") = "$Gateway"
-WshShell.Environment("PROCESS")("MESH_USER") = "$AssignedUser"
-WshShell.Environment("PROCESS")("MESH_TOKEN") = "$AssignedToken"
-WshShell.CurrentDirectory = "$ScriptDir"
-WshShell.Run "python -m core.agent", 0, False
-"@ | Out-File -FilePath $startupVbs -Encoding ascii
+    # Create Windows Startup launcher for persistent autostart.
+    # The interpreter is pinned by full path: relying on PATH breaks when the
+    # Microsoft Store "python" alias is present or PATH changes between sessions.
+    $startupDir = [Environment]::GetFolderPath("Startup")
+    $startupVbs = "$startupDir\antigravity-agent.vbs"
+    $pyExeForVbs = if ($pyExeOnly) { $pyExeOnly } else { "python" }
+    $agentLog = "$ConfigDir\agent.log"
+    @"
+    Set WshShell = CreateObject("WScript.Shell")
+    WshShell.Environment("PROCESS")("MESH_GATEWAY") = "$Gateway"
+    WshShell.Environment("PROCESS")("MESH_USER") = "$AssignedUser"
+    WshShell.Environment("PROCESS")("MESH_TOKEN") = "$AssignedToken"
+    WshShell.CurrentDirectory = "$ScriptDir"
+    ' Log the output so a silent autostart failure can be diagnosed later.
+    WshShell.Run "cmd /c """"$pyExeForVbs"" -m core.agent >> """"$agentLog"""" 2>&1""", 0, False
+    "@ | Out-File -FilePath $startupVbs -Encoding ascii
 
 # Launch now
-Start-Process python -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
+Start-Process $pyExeOnly -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
 
 Clear-Host
 
