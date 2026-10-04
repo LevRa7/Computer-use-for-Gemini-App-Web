@@ -399,6 +399,50 @@ def _spool_output(text: str) -> Optional[str]:
 # Tool 1-3: legacy tools (kept as-is for compatibility)
 # ---------------------------------------------------------------------------
 
+def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Report that this node is reachable, with hard evidence.
+
+    The answer exists because a model may otherwise claim the host is offline or
+    invent a reason. Every field here was just measured on the node: if this text
+    arrives at all, the agent and the tunnel are working by definition.
+    """
+    import datetime
+    import socket as _socket
+
+    now = datetime.datetime.now().astimezone()
+    uptime_s = None
+    try:
+        with open("/proc/uptime", "r") as handle:
+            uptime_s = float(handle.read().split()[0])
+    except Exception:
+        pass
+    try:
+        hostname = _socket.gethostname()
+    except Exception:
+        hostname = "unknown"
+
+    # The pid and the process start prove the agent is the one answering.
+    agent_pid = os.getpid()
+    payload = {
+        "status": "online",
+        "reachable": True,
+        "message": ("This node IS reachable: the request that produced this answer was executed "
+                    "on the host by the mesh agent. If a previous attempt reported the node as "
+                    "offline, that report was wrong - retry the operation instead of concluding "
+                    "the service is down."),
+        "hostname": hostname,
+        "agent_pid": agent_pid,
+        "checked_at": now.isoformat(timespec="seconds"),
+        "node_utc_offset": now.strftime("%z"),
+        "workspace": _WORKSPACE,
+        "pid_namespace": os.uname().nodename if hasattr(os, "uname") else hostname,
+    }
+    if uptime_s is not None:
+        payload["host_uptime_seconds"] = int(uptime_s)
+        payload["host_uptime_human"] = "%dh %dm" % (int(uptime_s // 3600), int((uptime_s % 3600) // 60))
+    return payload
+
+
 def _tool_system_vitals(args: Dict[str, Any]) -> Any:
     try:
         if _core_get_host_vitals is not None:
@@ -1308,6 +1352,13 @@ def _schema(properties: Dict[str, Any], required: Optional[List[str]] = None) ->
 
 TOOLS: List[Dict[str, Any]] = [
     {
+        "name": "mesh_status",
+        "title": "Mesh Status",
+        "description": ("Confirm this node is reachable. Call this first if you think the host is "
+                        "offline; it reports live evidence from the host itself."),
+        "inputSchema": _schema({}),
+    },
+    {
         "name": "system_vitals",
         "title": "System Vitals",
         "description": "Retrieve CPU, RAM and disk metrics of the local host.",
@@ -1475,6 +1526,7 @@ TOOLS: List[Dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
+    "mesh_status": _tool_mesh_status,
     "system_vitals": _tool_system_vitals,
     "get_orchestration_skill": _tool_get_orchestration_skill,
     "list_dir": _tool_list_dir,

@@ -37,9 +37,10 @@ def isolated_tools(tmp_path):
 # tool surface
 # ---------------------------------------------------------------------------
 
-def test_tools_surface_contains_all_13():
+def test_tools_surface_contains_all_tools():
     names = [t["name"] for t in mcp_tools.TOOLS]
     assert names == [
+        "mesh_status",
         "system_vitals",
         "get_orchestration_skill",
         "list_dir",
@@ -438,7 +439,10 @@ def test_server_exposes_all_tools_and_jsonrpc_list():
     status, response = server.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert status == 200
     names = {tool["name"] for tool in response["result"]["tools"]}
-    assert len(names) == 13
+    # Compare against the single source of truth so adding a tool cannot silently
+    # desynchronise the HTTP surface from the handler registry.
+    assert names == {t["name"] for t in mcp_tools.TOOLS}
+    assert "mesh_status" in names
 
     status, response = server.handle_jsonrpc(
         {
