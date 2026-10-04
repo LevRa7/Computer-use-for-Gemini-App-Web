@@ -131,10 +131,21 @@ MANDATORY GROUNDING & EXECUTION DIRECTIVES:
 async def call_remote_tool(user: str, name: str, args: dict) -> dict:
     tunnel = active_tunnels.get(user)
     if not tunnel or not tunnel.get("ws"):
+        # The agent reconnects within ~2s of a dropped link (VPN flap, network
+        # change, service restart), so give it a moment instead of reporting the
+        # node as offline immediately. A missing agent is then a rare answer.
+        for _ in range(16):                      # up to ~8 seconds
+            await asyncio.sleep(0.5)
+            tunnel = active_tunnels.get(user)
+            if tunnel and tunnel.get("ws"):
+                break
+    if not tunnel or not tunnel.get("ws"):
         return {
             "exit_code": 1,
             "stdout": "",
-            "stderr": f"[Mesh Gateway] Node '{user}' is offline. Please launch the agent on your local machine."
+            "stderr": (f"[Mesh Gateway] Node '{user}' did not come back within 8 seconds - the agent "
+                       f"on the host is not connected. Start/restart the mesh agent there, then retry; "
+                       f"this is a transport problem, not a missing file or permission.")
         }
     req_id = str(uuid.uuid4())
     fut = asyncio.get_running_loop().create_future()
