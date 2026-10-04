@@ -1,5 +1,6 @@
 import pytest
 import uuid
+pytest.importorskip("google.antigravity")  # private SDK: skip, never a collection ERROR
 from google.antigravity import LocalAgentConfig, types
 
 def test_create_agent_config_harness():

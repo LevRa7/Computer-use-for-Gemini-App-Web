@@ -296,6 +296,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] TLS: $TLS"
     if [ -n "$DOMAIN" ]; then echo "[DRY-RUN] Domain: $DOMAIN"; fi
     if [ -n "$USERNAME" ]; then echo "[DRY-RUN] User: $USERNAME"; fi
+    if [ -n "$TOKEN" ]; then echo "[DRY-RUN] Token: set (standalone: stored in ${CONFIG_DIR}/standalone.env, chmod 600)"; fi
     echo "[DRY-RUN] Systemd service and dependencies check: OK"
     exit 0
 fi
@@ -416,6 +417,37 @@ if [ "$MODE" = "standalone" ]; then
     ensure_dependencies
     mkdir -p "$CONFIG_DIR"
 
+    # Honour --token in standalone mode without embedding the secret in the
+    # (world-readable) unit/plist: keep it in a 0600 env file for systemd
+    # (EnvironmentFile) and use a 0600 plist environment block on macOS.
+    # core.server reads MESH_TOKEN as the default for --token.
+    STANDALONE_ENV_FILE="$CONFIG_DIR/standalone.env"
+    ENV_FILE_LINE=""
+    PLIST_ENV_BLOCK=""
+    if [ -n "$TOKEN" ]; then
+        printf 'MESH_TOKEN=%s\n' "$TOKEN" > "$STANDALONE_ENV_FILE"
+        chmod 600 "$STANDALONE_ENV_FILE"
+        ENV_FILE_LINE="EnvironmentFile=$STANDALONE_ENV_FILE"
+        PLIST_TOKEN=$(printf '%s' "$TOKEN" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+        PLIST_ENV_BLOCK="    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MESH_TOKEN</key>
+        <string>${PLIST_TOKEN}</string>
+    </dict>"
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            echo -e "${GREEN}[✓] Токен авторизации включён (chmod 600).${RESET}"
+        else
+            echo -e "${GREEN}[OK] Authorization token enabled (chmod 600).${RESET}"
+        fi
+    else
+        rm -f "$STANDALONE_ENV_FILE" 2>/dev/null || true
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            echo -e "${YELLOW}[!] Токен не задан (--token): сервер доступен без авторизации на 127.0.0.1.${RESET}"
+        else
+            echo -e "${YELLOW}[!] No --token given: server is unauthenticated on 127.0.0.1.${RESET}"
+        fi
+    fi
+
     if [ "$LANG_CHOICE" = "ru" ]; then
         echo "[2/3] Настройка systemd автозапуска на ПК..."
     else
@@ -438,6 +470,7 @@ if [ "$MODE" = "standalone" ]; then
         <string>$(which python3)</string>
         <string>-m</string>
         <string>core.server</string>
+        <string>--host=127.0.0.1</string>
         <string>--port=$PORT</string>
     </array>
     <key>WorkingDirectory</key>
@@ -446,9 +479,13 @@ if [ "$MODE" = "standalone" ]; then
     <true/>
     <key>KeepAlive</key>
     <true/>
+$PLIST_ENV_BLOCK
 </dict>
 </plist>
 EOF
+        if [ -n "$TOKEN" ]; then
+            chmod 600 "$PLIST_FILE"
+        fi
         launchctl unload "$PLIST_FILE" 2>/dev/null || true
         launchctl load -w "$PLIST_FILE" 2>/dev/null || true
     else
@@ -462,8 +499,9 @@ After=network.target
 
 [Service]
 Type=simple
+$ENV_FILE_LINE
 WorkingDirectory=$SCRIPT_DIR
-ExecStart=$PYTHON_BIN -m core.server --port=$PORT
+ExecStart=$PYTHON_BIN -m core.server --host 127.0.0.1 --port=$PORT
 Restart=always
 RestartSec=5
 
@@ -473,7 +511,11 @@ EOF
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable --now agy-standalone.service 2>/dev/null || {
             pkill -f "core.server" 2>/dev/null || true
-            nohup $PYTHON_BIN -m core.server --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
+            if [ -n "$TOKEN" ]; then
+                nohup env MESH_TOKEN="$TOKEN" $PYTHON_BIN -m core.server --host 127.0.0.1 --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
+            else
+                nohup $PYTHON_BIN -m core.server --host 127.0.0.1 --port="$PORT" > "$CONFIG_DIR/standalone.log" 2>&1 &
+            fi
         }
         loginctl enable-linger "$USER" 2>/dev/null || true
     fi
@@ -483,7 +525,28 @@ EOF
     else
         echo "[3/3] Verifying local endpoint..."
     fi
-    sleep 1
+    HEALTH_URL="http://127.0.0.1:${PORT}/health"
+    HEALTH_OK=false
+    for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+        HTTP_CODE=$(curl -s -o /dev/null -m 2 -w "%{http_code}" "$HEALTH_URL" 2>/dev/null || true)
+        if [ "$HTTP_CODE" = "200" ]; then
+            HEALTH_OK=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$HEALTH_OK" != true ]; then
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            echo -e "\033[1;31m[ОШИБКА] Standalone MCP-сервер не отвечает (HTTP ${HTTP_CODE:-нет ответа}): $HEALTH_URL\033[0m" >&2
+            echo -e "  Проверьте статус: ${CYAN}systemctl --user status agy-standalone.service${RESET}" >&2
+            echo -e "  Логи:             ${CYAN}journalctl --user -u agy-standalone.service -n 50 --no-pager${RESET}" >&2
+        else
+            echo -e "\033[1;31m[ERROR] Standalone MCP server is not responding (HTTP ${HTTP_CODE:-no response}): $HEALTH_URL\033[0m" >&2
+            echo -e "  Check status: ${CYAN}systemctl --user status agy-standalone.service${RESET}" >&2
+            echo -e "  Logs:         ${CYAN}journalctl --user -u agy-standalone.service -n 50 --no-pager${RESET}" >&2
+        fi
+        exit 1
+    fi
 
     MCP_LOCAL_URL="http://localhost:${PORT}/sse"
     

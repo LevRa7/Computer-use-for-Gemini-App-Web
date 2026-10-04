@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
+pytest.importorskip("google.antigravity.triggers")  # private SDK: skip, never a collection ERROR
 from google.antigravity.triggers import TriggerContext, FileChange, FileChangeKind
 from core.schemas import NodeVitals
 

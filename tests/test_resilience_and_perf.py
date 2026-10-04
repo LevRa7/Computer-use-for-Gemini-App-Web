@@ -5,12 +5,12 @@ import time
 import tracemalloc
 from unittest.mock import patch, MagicMock
 import pytest
-from google.antigravity import types
 from core.schemas import NodeVitals, ToolExecutionResult
 from core.server import get_coordinator_vitals
-from core.hooks import mesh_pre_tool_call, mesh_post_tool_call, AUDIT_LOG_PATH
-from core.policies import get_mesh_policies, evaluate_policies
-from core.triggers import check_mesh_health
+
+# The private google.antigravity SDK (needed by core.hooks / core.policies /
+# core.triggers) is imported lazily inside the tests that require it, so the
+# SDK-independent resilience tests still run where that SDK is not installed.
 
 # ==============================================================================
 # 1. Тесты надежности: таймауты и сетевые сбои (Resilience & Fault Tolerance)
@@ -57,6 +57,11 @@ def test_vitals_resilience_on_proc_failure():
 @pytest.mark.asyncio
 async def test_hooks_latency_benchmark():
     """Замер накладных расходов хуков pre_tool_call и политик. Порог: < 1.5 мс на вызов."""
+    pytest.importorskip("google.antigravity")
+    from google.antigravity import types
+    from core.hooks import mesh_pre_tool_call
+    from core.policies import get_mesh_policies, evaluate_policies
+
     policies = get_mesh_policies()
     call = types.ToolCall(name="run_command", args={"command": "uptime"})
 
@@ -85,6 +90,10 @@ async def test_hooks_latency_benchmark():
 @pytest.mark.asyncio
 async def test_concurrent_audit_logging():
     """Проверка потокобезопасной параллельной записи в mcp_audit.jsonl без повреждения данных."""
+    pytest.importorskip("google.antigravity")
+    from google.antigravity import types
+    from core.hooks import mesh_post_tool_call, AUDIT_LOG_PATH
+
     concurrent_calls = 40
 
     async def log_worker(worker_id: int):
@@ -118,6 +127,9 @@ async def test_concurrent_audit_logging():
 @pytest.mark.asyncio
 async def test_watchdog_memory_leak_soak():
     """Проверка отсутствия утечек памяти при 300 циклах работы вотчдога."""
+    pytest.importorskip("google.antigravity")
+    from core.triggers import check_mesh_health
+
     tracemalloc.start()
     snapshot1 = tracemalloc.take_snapshot()
 
