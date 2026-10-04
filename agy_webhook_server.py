@@ -28,6 +28,11 @@ LOG_FILE = os.path.join(BASE_DIR, "webhook_server.log")
 HISTORY_FILE = os.path.join(BASE_DIR, "webhook_history.json")
 AGY_BIN = "/root/.local/bin/agy"
 MATEBOOK_PASS = os.environ.get("MATEBOOK_PASS", "")  # never hardcode: set in the service environment
+# Workstation address, SSH user and labels are read from the environment ONLY.
+MATEBOOK_IP = os.environ.get("MATEBOOK_IP", "").strip()
+MATEBOOK_USER = os.environ.get("MATEBOOK_USER", "").strip()
+MATEBOOK_NODE_NAME = os.environ.get("MATEBOOK_NODE_NAME", "").strip() or "<workstation-host>"
+MATEBOOK_HOSTNAME = os.environ.get("MATEBOOK_HOSTNAME", "").strip() or "<hostname>"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -178,6 +183,10 @@ def get_system_metrics() -> dict:
 def get_matebook_vitals() -> dict:
     if not MATEBOOK_PASS:
         return {"error": "MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."}
+    if not MATEBOOK_IP:
+        return {"error": "MATEBOOK_IP environment variable is not set (hardcoded host addresses removed)."}
+    if not MATEBOOK_USER:
+        return {"error": "MATEBOOK_USER environment variable is not set (hardcoded SSH user removed)."}
     t0 = time.time()
     ssh_cmd = [
         "sshpass", "-p", MATEBOOK_PASS,
@@ -185,7 +194,7 @@ def get_matebook_vitals() -> dict:
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=10",
-        "<ssh-user>@<host-ip>",
+        f"{MATEBOOK_USER}@{MATEBOOK_IP}",
         "free -h; echo '---'; uptime; echo '---'; cat /sys/class/power_supply/BAT*/capacity 2>/dev/null; cat /sys/class/power_supply/BAT*/status 2>/dev/null"
     ]
     try:
@@ -214,9 +223,9 @@ def get_matebook_vitals() -> dict:
 
         return {
             "status": "success",
-            "host": "workstation-host",
-            "hostname": "workstation-host",
-            "tailscale_ip": "100.64.0.10",
+            "host": MATEBOOK_NODE_NAME,
+            "hostname": MATEBOOK_HOSTNAME,
+            "tailscale_ip": MATEBOOK_IP,
             "ram": ram_info,
             "uptime": uptime_str,
             "battery": {
@@ -1019,7 +1028,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 mb = res.get("matebook", res)
                 ram = mb.get("ram", {})
                 bat = mb.get("battery", {})
-                txt = f"Host: {mb.get('hostname', 'matebook')} ({mb.get('tailscale_ip', '100.64.0.10')})\n" \
+                txt = f"Host: {mb.get('hostname', 'matebook')} ({mb.get('tailscale_ip', MATEBOOK_IP or '<workstation-ip>')})\n" \
                       f"RAM: Available {ram.get('available', 'N/A')}, Free {ram.get('free', 'N/A')} / Total {ram.get('total', 'N/A')}\n" \
                       f"Uptime: {mb.get('uptime', 'N/A')}\n" \
                       f"Battery: {bat.get('percentage', 'N/A')} ({bat.get('status', 'unknown')})"

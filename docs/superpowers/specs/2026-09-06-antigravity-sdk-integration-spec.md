@@ -55,9 +55,9 @@ flowchart TD
         Orchestrator -->|Direct FastMCP| McpServer[Universal FastMCP Server<br/>Port 8096]
         
         McpServer -->|Local Shell| CoordinatorHost[Coordinator / VPS Host]
-        McpServer -->|SSH / Tunnel| NodeMatebook[Node: workstation]
+        McpServer -->|SSH / Tunnel| NodeWorkstation[Node: <workstation-host>]
         McpServer -->|SSH / Tunnel| NodeDebian[Node: Debian-Node]
-        McpServer -->|SSH / Tunnel| NodeRacknerd2[Node: RackNerd-Node]
+        McpServer -->|SSH / Tunnel| NodeVPS[Node: <vps-host>]
     end
 
     Watchdog -.->|Async Push Alert| Orchestrator

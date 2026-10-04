@@ -13,8 +13,8 @@ async def test_mesh_watchdog_detects_node_failure():
     ctx.send = AsyncMock()
 
     failed_node = NodeVitals(
-        hostname="matebook",
-        ip="100.64.0.50",
+        hostname="workstation",
+        ip="100.64.0.20",
         is_online=False,
         cpu_load_1m=0.0,
         ram_used_mb=0,
@@ -31,7 +31,7 @@ async def test_mesh_watchdog_detects_node_failure():
     ctx.send.assert_called_once()
     alert_msg = ctx.send.call_args[0][0]
     assert "[WATCHDOG ALERT]" in alert_msg
-    assert "matebook" in alert_msg
+    assert "workstation" in alert_msg
 
 @pytest.mark.asyncio
 async def test_mesh_watchdog_healthy_silent():

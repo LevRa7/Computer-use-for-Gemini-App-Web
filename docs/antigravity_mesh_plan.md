@@ -20,10 +20,10 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 ## ⛔ 2. КАТЕГОРИЧЕСКИЕ АНТИПАТТЕРНЫ И ТАБУ
 
 1. 🚫 **Прямой SSH из Gemini ЗАПРЕЩЁН:** В песочнице Google нет Tailscale и SSH-ключей. Прямой вызов SSH падает с ошибкой. Всегда используйте инструменты `bash_exec`, `debian_exec`, `matebook_exec`.
-2. 🚫 **Google Search для API ЗАПРЕЩЁН:** Google Search предназначен для публичного веб-индекса. Попытка запросить `https://levra7-ai.example.com` через Search блокируется с **403 Forbidden**.
+2. 🚫 **Google Search для API ЗАПРЕЩЁН:** Google Search предназначен для публичного веб-индекса. Попытка запросить `https://<your-domain>` через Search блокируется с **403 Forbidden**.
 3. 🚫 **Браузер («Компьютер») ЗАПРЕЩЁН:** Не подходит для вызова API и управления файлами.
 4. 🚫 **Перезапись файлов в Google Drive ЗАПРЕЩЕНА:** Gemini Drive API не поддерживает in-place edit.
-5. 🚫 **Обращение по прямому IP `100.64.0.31` ЗАПРЕЩЕНО:** SSL выписан строго на `levra7-ai.example.com`.
+5. 🚫 **Обращение по прямому IP `<gateway-ip>` ЗАПРЕЩЕНО:** SSL выписан строго на `<your-domain>`.
 
 ---
 
@@ -39,17 +39,17 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
                                     ▼
                ┌─────────────────────────────────────────┐
                │         Antigravity Remote Mesh         │
-               │    (VPS Host: vps2-host)         │
+               │    (VPS Host: <vps-host>)         │
                └──────────┬──────────────┬───────────────┘
                           │              │               │
             (Local Agent) │              │ (Tailscale)   │ (Tailscale SSH)
                           ▼              ▼               ▼
 ┌──────────────────────────────┐ ┌─────────────────────────────┐ ┌─────────────────────────────┐
-│    VPS Researcher Subagent   │ │ Debian Ryzen 9 5950X Node   │ │   workstation Coder Agent    │
-│  Модель: gemini-3.8-flash    │ │ Хост: debian (100.64.0.20)│ │ Модель: gemini-3.1-pro-high │
+│    VPS Researcher Subagent   │ │ Debian Ryzen 9 5950X Node   │ │   <workstation-host> Coder Agent    │
+│  Модель: gemini-3.8-flash    │ │ Хост: <compute-host> (<compute-ip>)│ │ Модель: gemini-3.1-pro-high │
 │  Хост: Primary VPS           │ │ Железо: 16C/32T, 64GB RAM   │ │   или claude-sonnet-4-6     │
-│  Инструменты:                │ │ Инструменты:                │ │ Хост: workstation-host        │
-│   • bash_exec()              │ │  • debian_exec()            │ │       (100.64.0.10)      │
+│  Инструменты:                │ │ Инструменты:                │ │ Хост: <workstation-host>        │
+│   • bash_exec()              │ │  • debian_exec()            │ │       (<workstation-ip>)      │
 │   • system_vitals()          │ │  • Тяжёлые вычисления       │ │ Инструменты:                │
 │   • read_file(), write_file()│ │  • Параллельная сборка      │ │  • matebook_exec()          │
 │   • Мгновенный аудит логов   │ │  • Запуск контейнеров/VM    │ │  • matebook_vitals()        │
@@ -60,17 +60,17 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 
 ## 🛠️ 4. Нативные инструменты MCP (Gemini Web Spark)
 
-В Gemini подключено приложение **Antigravity Mesh** (`https://levra7-ai.example.com/sse`):
+В Gemini подключено приложение **Antigravity Mesh** (`https://<your-domain>/sse`):
 
-* `bash_exec(command)` — моментальное выполнение команд на VPS (`vps2-host`).
-* `debian_exec(command)` — ресурсоёмкие вычисления, сборки, бенчмарки на узле **AMD Ryzen 9 5950X / 64GB RAM** (`100.64.0.20`).
-* `matebook_exec(command)` — запуск команд и автономного кодинг-агента на **workstation** (`100.64.0.10`).
-* `racknerd2_exec(command)` — запуск команд на второй VPS **RackNerd-5a24bf9** (`100.64.0.30` / `100.64.0.2`).
+* `bash_exec(command)` — моментальное выполнение команд на VPS (`<vps-host>`).
+* `debian_exec(command)` — ресурсоёмкие вычисления, сборки, бенчмарки на узле **AMD Ryzen 9 5950X / 64GB RAM** (`<compute-ip>`).
+* `matebook_exec(command)` — запуск команд и автономного кодинг-агента на **<workstation-host>** (`<workstation-ip>`).
+* `racknerd2_exec(command)` — запуск команд на второй VPS **<vps-host>** (`<vps-ip>` / `100.64.0.12`).
 * `system_vitals()` — мгновенная телеметрия VPS (CPU Load, RAM, Disk, Uptime).
-* `matebook_vitals()` — заряд батареи, статус питания и память workstation.
+* `matebook_vitals()` — заряд батареи, статус питания и память <workstation-host>.
 * `read_file(path, start_line, end_line)` — быстрое чтение строк любых файлов на сервере.
 * `write_file(path, content)` — прямое создание и запись файлов.
-* `gdrive_copy(file_name_or_id, dest_path, target_node)` — копирование файлов с Google Диска на VPS/Matebook/Debian (с авто-конвертацией Google Docs).
+* `gdrive_copy(file_name_or_id, dest_path, target_node)` — копирование файлов с Google Диска на VPS/<workstation-host>/Debian (с авто-конвертацией Google Docs).
 
 > 🚀 **Все вызовы происходят напрямую без создания файлов в Google Drive с задержкой 100–200 мс!**
 
@@ -83,12 +83,12 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 * Токен Google OAuth: `/root/agy-gdrive-runner/token.json`
 * Конфигурация rclone: `/root/.config/rclone/rclone.conf`
 * Логи: `/root/agy-gdrive-runner/mcp_requests.log`, `agy_watcher.log`, `agy_sync.log`
-* Эндпоинты: `https://levra7-ai.example.com/sse`, `https://levra7-ai.example.com/mcp`
+* Эндпоинты: `https://<your-domain>/sse`, `https://<your-domain>/mcp`
 
 ### ⚙️ Выполняемые команды (Commands):
 * VPS: `bash_exec("free -h && uptime -p")`
 * Ryzen 9 5950X: `debian_exec("hostname && uname -a && free -h")`
-* workstation: `matebook_exec("hostname && uptime")`
+* <workstation-host>: `matebook_exec("hostname && uptime")`
 * Телеметрия: `system_vitals()`, `matebook_vitals()`
 
 ### 📄 Файлы (Files):
@@ -116,7 +116,7 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 2. **Пути (Paths):** абсолютные пути к файлам и каталогам (например, `/root/agy-gdrive-runner/`).
 3. **Выполняемые команды (Commands):** точная команда целиком с аргументами.
 4. **Файлы (Files):** прочитанные, измененные или созданные файлы.
-5. **Целевой узел и метрики:** хост (VPS, Debian 100.64.0.20, Matebook 100.64.0.10), время исполнения и сырой вывод.
+5. **Целевой узел и метрики:** хост (VPS, Debian <compute-ip>, <workstation-host> <workstation-ip>), время исполнения и сырой вывод.
 
 ---
 

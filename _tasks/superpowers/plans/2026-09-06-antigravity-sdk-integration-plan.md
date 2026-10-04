@@ -3,7 +3,7 @@
 - **Дата:** 2026-09-06
 - **Спецификация:** [`spec_antigravity_sdk_integration.md`](file:///root/.gemini/antigravity-cli/brain/7d76670c-1b5e-4b9f-a56f-d8ae0bb5bcf6/spec_antigravity_sdk_integration.md)
 - **Методология:** Superpowers Subagent-Driven TDD (Red -> Verify Red -> Green -> Verify Green -> Commit)
-- **Целевое рабочее пространство:** `/root/agy-gdrive-runner` (Coordinator) и синхронизация в `~/MyProjects/antigravity-mesh` (workstation)
+- **Целевое рабочее пространство:** `/root/agy-gdrive-runner` (Coordinator) и синхронизация в `~/MyProjects/antigravity-mesh` (<workstation-host>)
 
 ---
 
@@ -16,7 +16,7 @@
 - [x] **Task 5: Hierarchical Subagents Definition (`core/subagents.py`)**
 - [x] **Task 6: Unified Agent Harness & Session Persistence (`core/agent_harness.py`)**
 - [x] **Task 7: FastMCP Server Typed Integration (`core/server.py`)**
-- [x] **Task 8: End-to-End E2E Verification & Git Sync to workstation**
+- [x] **Task 8: End-to-End E2E Verification & Git Sync to <workstation-host>**
 
 ---
 
@@ -235,9 +235,9 @@
 
 ---
 
-## Task 8: End-to-End E2E Verification & Git Sync to workstation
+## Task 8: End-to-End E2E Verification & Git Sync to <workstation-host>
 
-**Цель:** Выполнить сквозное тестирование полного конвейера (схемы + хуки + триггеры + сервер), зафиксировать изменения в Git и синхронизировать рабочий каталог на целевом ноутбуке workstation.
+**Цель:** Выполнить сквозное тестирование полного конвейера (схемы + хуки + триггеры + сервер), зафиксировать изменения в Git и синхронизировать рабочий каталог на целевом ноутбуке <workstation-host>.
 
 - **Файлы:**
   - Создать: `tests/test_e2e_antigravity_mesh.py`
@@ -255,10 +255,10 @@
    systemctl is-active agy-mcp.service
    # Ожидаемый результат: active
    ```
-3. **Шаг 3:** Синхронизация с workstation через Git:
+3. **Шаг 3:** Синхронизация с <workstation-host> через Git:
    ```bash
    git push origin master
-   # На workstation через MCP matebook_exec:
+   # На <workstation-host> через MCP matebook_exec:
    # git pull origin master && pytest tests/ -v
    ```
 4. **Шаг 4:** Фиксация релизного коммита:

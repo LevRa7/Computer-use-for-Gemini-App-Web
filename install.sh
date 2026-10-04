@@ -378,10 +378,10 @@ if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
         4)
             echo ""
             if [ "$LANG_CHOICE" = "ru" ]; then
-                read -rp "Введите SSH цель (например, user@100.64.0.50): " REMOTE_TARGET
+                read -rp "Введите SSH цель (например, user@<host-ip>): " REMOTE_TARGET
                 read -rp "Порт SSH [22]: " REMOTE_PORT
             else
-                read -rp "Enter SSH target (e.g., user@100.64.0.50): " REMOTE_TARGET
+                read -rp "Enter SSH target (e.g., user@<host-ip>): " REMOTE_TARGET
                 read -rp "SSH Port [22]: " REMOTE_PORT
             fi
             REMOTE_PORT=${REMOTE_PORT:-22}

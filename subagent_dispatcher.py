@@ -3,7 +3,7 @@
 subagent_dispatcher.py - Multi-Device Subagent Orchestrator for Antigravity & Web-Gemini.
 Dispatches subagent tasks to:
 1. VPS Local Subagent (gemini-3.8-flash-high) - for research, logs, monitoring, fast audits.
-2. workstation Remote Subagent (gemini-3.1-pro-high / claude-sonnet-4-6) - for development, tests, coding.
+2. Workstation Remote Subagent (gemini-3.1-pro-high / claude-sonnet-4-6) - for development, tests, coding.
 Operates without any custom harness on the remote device, leveraging native SSH and agy daemon.
 """
 
@@ -33,8 +33,9 @@ logging.basicConfig(
 logger = logging.getLogger("subagent_dispatcher")
 
 AGY_BIN = "/root/.local/bin/agy"
-MATEBOOK_IP = "100.64.0.10"
-MATEBOOK_USER = "lev"
+# Workstation address, SSH user and password are read from the environment ONLY.
+MATEBOOK_IP = os.environ.get("MATEBOOK_IP", "").strip()
+MATEBOOK_USER = os.environ.get("MATEBOOK_USER", "").strip()
 MATEBOOK_PASS = os.environ.get("MATEBOOK_PASS", "")  # never hardcode: set in the service environment
 
 # Subagent Tasks Storage
@@ -97,9 +98,9 @@ def run_vps_subagent(prompt: str, model: str = "gemini-3.8-flash-high", timeout:
 
 
 def run_matebook_subagent(prompt_or_cmd: str, model: str = "gemini-3.1-pro-high", mode: str = "auto", timeout: int = 180) -> dict:
-    """Runs a development / test / coding task on workstation via Tailscale SSH."""
+    """Runs a development / test / coding task on the workstation via Tailscale SSH."""
     t0 = time.time()
-    logger.info(f"Spawning workstation Dev Subagent: {prompt_or_cmd[:80]}...")
+    logger.info(f"Spawning Workstation Dev Subagent: {prompt_or_cmd[:80]}...")
 
     if not MATEBOOK_PASS:
         return {
@@ -110,6 +111,30 @@ def run_matebook_subagent(prompt_or_cmd: str, model: str = "gemini-3.1-pro-high"
             "exit_code": 1,
             "stdout": "",
             "stderr": "MATEBOOK_PASS environment variable is not set (hardcoded credentials removed).",
+            "duration_seconds": round(time.time() - t0, 2),
+        }
+
+    if not MATEBOOK_IP:
+        return {
+            "status": "error",
+            "target": "matebook",
+            "role": "coder",
+            "model": model,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "MATEBOOK_IP environment variable is not set (hardcoded host addresses removed).",
+            "duration_seconds": round(time.time() - t0, 2),
+        }
+
+    if not MATEBOOK_USER:
+        return {
+            "status": "error",
+            "target": "matebook",
+            "role": "coder",
+            "model": model,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "MATEBOOK_USER environment variable is not set (hardcoded SSH user removed).",
             "duration_seconds": round(time.time() - t0, 2),
         }
 

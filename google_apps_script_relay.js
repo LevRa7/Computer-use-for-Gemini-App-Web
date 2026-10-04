@@ -10,7 +10,7 @@
  * 2. Paste this code into Code.gs and save.
  * 3. Go to "Project Settings" (gear icon on the left) -> "Script Properties".
  * 4. Add the following Script Properties:
- *    - AGY_ENDPOINT_BASE : https://levra7-ai.example.com/api/agy
+ *    - AGY_ENDPOINT_BASE : https://<your-domain>/api/agy
  *    - AGY_SECRET_TOKEN  : <your_secret_token_from_webhook_secret.txt>
  * 5. Click "Deploy" -> "New deployment" -> Select type "Web app".
  *    - Description: "AGY Secure Relay"
@@ -23,7 +23,7 @@
 function getConfiguration() {
   var props = PropertiesService.getScriptProperties();
   return {
-    endpointBase: props.getProperty('AGY_ENDPOINT_BASE') || "https://levra7-ai.example.com/api/agy",
+    endpointBase: props.getProperty('AGY_ENDPOINT_BASE') || "https://<your-domain>/api/agy",
     secretToken: props.getProperty('AGY_SECRET_TOKEN') || ""
   };
 }

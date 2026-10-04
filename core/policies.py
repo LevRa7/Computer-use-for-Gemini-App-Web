@@ -5,9 +5,12 @@ from google.antigravity import types
 from google.antigravity.hooks import policy
 from google.antigravity.hooks.policy import Policy, Decision
 
+# Workspace roots are read from the environment ONLY -- never hardcode a personal
+# home directory. Point MESH_COORDINATOR_WORKSPACE / MESH_WORKSPACE at the real
+# deployment paths in the service environment.
 ALLOWED_WORKSPACES = [
-    "/root/agy-gdrive-runner",
-    "~/MyProjects/antigravity-mesh",
+    os.environ.get("MESH_COORDINATOR_WORKSPACE", "/root/agy-gdrive-runner"),
+    os.environ.get("MESH_WORKSPACE", "/root/antigravity-mesh"),
 ]
 
 SAFE_COMMAND_PREFIXES = [

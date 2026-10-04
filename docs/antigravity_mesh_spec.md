@@ -4,9 +4,9 @@
 ---
 
 ## 1. Основной VPS-сервер (Primary Host)
-- **Имя хоста:** `vps2-host`
-- **Публичный IP:** `100.64.0.31`
-- **Домен (HTTPS):** `https://levra7-ai.example.com`
+- **Имя хоста:** `<vps-host>`
+- **Публичный IP:** `<gateway-ip>`
+- **Домен (HTTPS):** `https://<your-domain>`
 - **Tailscale IP:** `100.64.0.1`
 - **ОС и ядро:** `Ubuntu 22.04.5 LTS` (Kernel `5.15.0-190-generic`)
 - **Аптайм:** `113.33` часов | **Load Average:** `[0.81, 0.69, 0.62]`
@@ -35,38 +35,38 @@
 ---
 
 ## 2. Известные удалённые узлы (Tailscale Network)
-### 💻 workstation-host (`workstation-host`)
-- **Tailscale IP:** `100.64.0.10`
-- **Пользователь SSH:** **`lev`** *(Внимание: логин именно `lev`, не `me`!)*
+### 💻 <workstation-host> (`<workstation-host>`)
+- **Tailscale IP:** `<workstation-ip>`
+- **Пользователь SSH:** **`<ssh-user>`** *(Внимание: логин именно `<ssh-user>`, не `me`!)*
 - **ОС:** `Debian GNU/Linux 13 (trixie)` | **CPU:** `AMD Ryzen 7 5800H (16 vCPU)` | **RAM:** `14 GiB`
 - **Назначение:** Desktop Workstation & AI Development
 - **Нативный вызов через MCP:** `matebook_exec('<команда>')`
-- **Команда SSH на VPS хосте:** `sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
+- **Команда SSH на VPS хосте:** `sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<workstation-ip> '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
 
-### 💻 compute-node (`debian`)
-- **Tailscale IP:** `100.64.0.20`
+### 💻 <compute-host> (`<compute-host>`)
+- **Tailscale IP:** `<compute-ip>`
 - **Пользователь SSH:** **`root`** *(Внимание: логин именно `root`, не `me`!)*
 - **ОС:** `Debian GNU/Linux 13 (trixie)` | **CPU:** `AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)` | **RAM:** `62 GiB`
 - **Назначение:** Heavy Compute & VM Host (QEMU / Antigravity / AI Services)
 - **Нативный вызов через MCP:** `debian_exec('<команда>')`
-- **Команда SSH на VPS хосте:** `sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
+- **Команда SSH на VPS хосте:** `sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@<compute-ip> '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
 
 ---
 
 ## 3. Регламент оркестрации и выполнения команд (Web-Gemini)
-> 🚨 **МАНДАТ:** Все команды, чтение/запись файлов и телеметрия выполняются **ИСКЛЮЧИТЕЛЬНО НАПРЯМУЮ ЧЕРЕЗ API / MCP** (`https://levra7-ai.example.com/sse`). Google Диск используется **ТОЛЬКО** в случае, если необходимо передать пользователю файл, документ или архив. Создавать файлы очередей в Google Диске для обычных команд ЗАПРЕЩЕНО.
+> 🚨 **МАНДАТ:** Все команды, чтение/запись файлов и телеметрия выполняются **ИСКЛЮЧИТЕЛЬНО НАПРЯМУЮ ЧЕРЕЗ API / MCP** (`https://<your-domain>/sse`). Google Диск используется **ТОЛЬКО** в случае, если необходимо передать пользователю файл, документ или архив. Создавать файлы очередей в Google Диске для обычных команд ЗАПРЕЩЕНО.
 
 ### ⛔ Антипаттерны и запреты:
 1. 🚫 **Прямой SSH из браузера Gemini ЗАПРЕЩЁН:** В песочнице Google нет Tailscale. Прямой SSH всегда завершится ошибкой. Используйте инструменты `bash_exec`, `debian_exec`, `matebook_exec`.
 2. 🚫 **Google Search для API ЗАПРЕЩЁН:** Поисковик не может опрашивать динамический API и блокируется шлюзом с 403-й ошибкой.
 3. 🚫 **Браузер («Компьютер») ЗАПРЕЩЁН:** Не подходит для вызова API.
 4. 🚫 **Перезапись файлов в Google Drive ЗАПРЕЩЕНА:** В Gemini нет `update_file`.
-5. 🚫 **Обращение по прямому IP `100.64.0.31`:** Сертификат SSL привязан строго к домену `levra7-ai.example.com`.
+5. 🚫 **Обращение по прямому IP `<gateway-ip>`:** Сертификат SSL привязан строго к домену `<your-domain>`.
 
 ### 🛠️ Нативные инструменты MCP (Gemini Web Spark):
-- `bash_exec(command)`: моментальный запуск команд на VPS (`vps2-host`).
-- `debian_exec(command)`: ресурсоёмкие вычисления и тесты на **AMD Ryzen 9 5950X / 64GB RAM** (`100.64.0.20`).
-- `matebook_exec(command)`: команды и кодинг-агент на **workstation** (`100.64.0.10`).
+- `bash_exec(command)`: моментальный запуск команд на VPS (`<vps-host>`).
+- `debian_exec(command)`: ресурсоёмкие вычисления и тесты на **AMD Ryzen 9 5950X / 64GB RAM** (`<compute-ip>`).
+- `matebook_exec(command)`: команды и кодинг-агент на **<workstation-host>** (`<workstation-ip>`).
 - `system_vitals()`, `matebook_vitals()`: мгновенная телеметрия.
 - `read_file(path, start_line, end_line)`: чтение любых файлов на сервере.
 - `write_file(path, content)`: создание и модификация файлов на сервере.
