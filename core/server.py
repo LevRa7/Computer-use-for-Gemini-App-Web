@@ -82,6 +82,9 @@ except Exception as _vitals_import_error:  # pragma: no cover
     _core_get_host_vitals = None  # type: ignore
     logger.debug("core.vitals unavailable (%s); using inline vitals collector", _vitals_import_error)
 
+# Shared tool logic.  core.mcp_tools is stdlib-only, so this import always works.
+from core import mcp_tools  # noqa: E402
+
 
 class _FallbackVitals(object):
     """Minimal stand-in for :class:`core.schemas.NodeVitals` without pydantic."""
@@ -268,184 +271,43 @@ def _workspace_dir() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Local tool implementations (semantics mirrored from core/agent.py).
+# Tool logic now lives in core/mcp_tools.py; the helpers below only delegate.
 # ---------------------------------------------------------------------------
 
-def run_bash_sync(command: str, timeout: int = 120) -> Dict[str, Any]:
-    """Execute *command* through the shell, returning stdout/stderr/exit_code/duration."""
-    start = time.time()
-    try:
-        proc = subprocess.run(
-            ["bash", "-c", command],
-            cwd=_workspace_dir(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            errors="replace",
-        )
-        return {
-            "stdout": truncate_output(sanitize_output(proc.stdout)),
-            "stderr": truncate_output(sanitize_output(proc.stderr)),
-            "exit_code": proc.returncode,
-            "duration": round(time.time() - start, 3),
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "stdout": "",
-            "stderr": (
-                f"Command timed out after {timeout} seconds. Tip: For long background tasks, "
-                "run with 'nohup ... > output.log 2>&1 &'."
-            ),
-            "exit_code": 124,
-            "duration": round(time.time() - start, 3),
-        }
-    except Exception as exc:
-        return {
-            "stdout": "",
-            "stderr": str(exc),
-            "exit_code": 1,
-            "duration": round(time.time() - start, 3),
-        }
-
-
-def list_dir_sync(path: str = "") -> Dict[str, Any]:
-    """List files/directories at *path*, defaulting to the current workspace."""
-    try:
-        target = path.strip() if path else _workspace_dir()
-        target = os.path.expanduser(target)
-        if not os.path.isabs(target):
-            target = os.path.abspath(os.path.join(_workspace_dir(), target))
-        if not os.path.exists(target):
-            return {"exit_code": 1, "stdout": "", "stderr": f"Path not found: {target}"}
-        if os.path.isfile(target):
-            return read_file_sync(target)
-
-        entries = []
-        for entry in sorted(os.scandir(target), key=lambda x: (not x.is_dir(), x.name.lower())):
-            suffix = "/" if entry.is_dir() else ""
-            size = entry.stat().st_size if entry.is_file() else 0
-            entries.append(f"{entry.name}{suffix}" + (f" ({size} bytes)" if entry.is_file() else ""))
-
-        listing = "\n".join(entries) if entries else "(empty directory)"
-        return {
-            "exit_code": 0,
-            "stdout": f"Directory: {target} ({len(entries)} items):\n{listing}",
-            "stderr": "",
-        }
-    except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
-
-
-def read_file_sync(path: str, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
-    """Read *path* with the ``%4d | `` line-numbered format used by the agent."""
-    try:
-        target = path.strip()
-        target = os.path.expanduser(target)
-        if not os.path.isabs(target):
-            target = os.path.abspath(os.path.join(_workspace_dir(), target))
-        if not os.path.exists(target):
-            return {"exit_code": 1, "stdout": "", "stderr": f"File not found: {target}"}
-        if os.path.isdir(target):
-            return list_dir_sync(target)
-
-        with open(target, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-
-        s = max(1, start_line or 1) - 1
-        e = min(len(lines), end_line) if end_line else len(lines)
-        selected = lines[s:e]
-        content = "".join(f"{idx + s + 1:4d} | {line}" for idx, line in enumerate(selected))
-        header = f"File: {target} (lines {s + 1}-{e} of {len(lines)} total)\n" + ("-" * 60) + "\n"
-        return {
-            "exit_code": 0,
-            "stdout": truncate_output(sanitize_output(header + content)),
-            "stderr": "",
-        }
-    except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
-
-
 def _load_orchestration_skill() -> str:
-    """Read the live orchestrator skill, with an inline Antigravity fallback."""
-    skill_path = Path(__file__).resolve().parent.parent / "skills" / "orchestrator.md"
-    try:
-        if skill_path.exists():
-            return skill_path.read_text(encoding="utf-8")
-    except Exception as exc:  # pragma: no cover - filesystem race
-        logger.warning("Could not read %s: %s", skill_path, exc)
-    return (
-        "# Antigravity Mesh Orchestrator Skill (Standalone)\n"
-        "Mode: Local Standalone Server (antigravity_mesh).\n"
-        "All commands execute directly on this host through the Antigravity Mesh MCP tools.\n"
-        "Rules:\n"
-        "1. Never ask the user to run commands manually; use bash_exec.\n"
-        "2. Verify exit codes and stdout/stderr before continuing.\n"
-        "3. On non-zero exit code, halt and report the error details.\n"
-    )
+    """Read the live orchestrator skill through the shared tool module."""
+    return mcp_tools.call_tool("get_orchestration_skill", {})
 
 
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
-# Metadata advertised through ``tools/list``. Order defines the listed order.
-TOOL_DEFINITIONS: List[Dict[str, Any]] = [
-    {
-        "name": "system_vitals",
-        "title": "System Vitals",
-        "description": "Retrieve CPU, RAM, and Disk metrics of the local host.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "bash_exec",
-        "title": "Execute Bash Command",
-        "description": "Execute a shell command directly on the local host (120s timeout).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"command": {"type": "string", "description": "Shell command to execute."}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_orchestration_skill",
-        "title": "Get Orchestration Skill",
-        "description": "Load the current Antigravity orchestration skill and rules.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "list_dir",
-        "title": "List Directory",
-        "description": "List files and directories at the given path.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "Directory or file path."}},
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "read_file",
-        "title": "Read File",
-        "description": "Read a text file, optionally restricted to a line range.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File path to read."},
-                "start_line": {"type": "integer", "description": "First line (1-based)."},
-                "end_line": {"type": "integer", "description": "Last line (inclusive)."},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    },
-]
+# Metadata advertised through ``tools/list`` - the single source of truth is
+# core/mcp_tools.TOOLS (name/description/inputSchema), shared with the tunnel node.
+TOOL_DEFINITIONS: List[Dict[str, Any]] = mcp_tools.TOOLS
 
 _REQUIRED_ARGS: Dict[str, Tuple[str, ...]] = {
     "bash_exec": ("command",),
-    "list_dir": ("path",),
     "read_file": ("path",),
+    "write_file": ("path", "content"),
+    "edit_file": ("path", "old_string", "new_string"),
+    "grep_search": ("pattern",),
+    "glob_find": ("pattern",),
+    "run_job": ("command",),
+    "job_output": ("job_id",),
+    "job_kill": ("job_id",),
 }
+
+
+def _make_tool_callable(tool_name: str) -> Callable[..., Any]:
+    """Wrap a shared tool as an old-style callable (``f(**kwargs) -> dict``)."""
+
+    def _call(**kwargs: Any) -> Any:
+        return mcp_tools.call_tool(tool_name, kwargs)
+
+    _call.__name__ = str(tool_name)
+    return _call
 
 
 class _InvalidParams(Exception):
@@ -469,11 +331,8 @@ class AntigravityMeshServer(object):
 
     # -- tool registry ----------------------------------------------------
     def _register_default_tools(self) -> None:
-        self.register_tool("system_vitals", self.system_vitals)
-        self.register_tool("bash_exec", self.bash_exec)
-        self.register_tool("get_orchestration_skill", self.get_orchestration_skill)
-        self.register_tool("list_dir", self.list_dir)
-        self.register_tool("read_file", self.read_file)
+        for spec in TOOL_DEFINITIONS:
+            self.register_tool(spec["name"], _make_tool_callable(spec["name"]))
 
     def register_tool(self, name: str, func: Callable[..., Any]) -> None:
         self.tools[name] = func
@@ -494,23 +353,23 @@ class AntigravityMeshServer(object):
                 specs.append(self._specs[name])
         return specs
 
-    # -- tool implementations --------------------------------------------
+    # -- tool implementations (delegate to the shared implementation) ------
     def system_vitals(self) -> Dict[str, Any]:
-        if _core_get_host_vitals is not None:
-            return _core_get_host_vitals()
-        return _fallback_host_vitals()
+        return mcp_tools.call_tool("system_vitals", {})
 
     def bash_exec(self, command: str) -> Dict[str, Any]:
-        return run_bash_sync(command, timeout=120)
+        return mcp_tools.call_tool("bash_exec", {"command": command})
 
     def get_orchestration_skill(self) -> str:
-        return _load_orchestration_skill()
+        return mcp_tools.call_tool("get_orchestration_skill", {})
 
     def list_dir(self, path: str = "") -> Dict[str, Any]:
-        return list_dir_sync(path)
+        return mcp_tools.call_tool("list_dir", {"path": path})
 
     def read_file(self, path: str, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
-        return read_file_sync(path, start_line=start_line, end_line=end_line)
+        return mcp_tools.call_tool(
+            "read_file", {"path": path, "start_line": start_line, "end_line": end_line}
+        )
 
     # -- JSON-RPC dispatch ------------------------------------------------
     @staticmethod
@@ -678,8 +537,8 @@ class AntigravityMeshServer(object):
             return 200, self._error(req_id, -32602, "Invalid params: %s" % exc)
 
         try:
-            value = self._invoke_tool(name, arguments)
-        except Exception as exc:
+            value = mcp_tools.call_tool(name, arguments)
+        except Exception as exc:  # defensive: call_tool itself never raises
             # A failing tool is an MCP tool error, NOT a JSON-RPC error.
             logger.exception("Tool %r raised", name)
             return 200, {
@@ -710,35 +569,25 @@ class AntigravityMeshServer(object):
             command = arguments.get("command")
             if not isinstance(command, str) or not command.strip():
                 raise _InvalidParams("'command' is required and must be a non-empty string")
-        if name in ("list_dir", "read_file") and not isinstance(arguments.get("path"), str):
-            raise _InvalidParams("'path' must be a string")
+        if name in ("list_dir", "read_file"):
+            path = arguments.get("path")
+            if path is not None and not isinstance(path, str):
+                raise _InvalidParams("'path' must be a string")
         if name == "read_file":
             for key in ("start_line", "end_line"):
                 value = arguments.get(key)
                 if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
                     raise _InvalidParams("'%s' must be an integer" % key)
 
-    def _invoke_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        func = self.tools[name]
-        if name == "bash_exec":
-            return func(command=arguments["command"])
-        if name == "list_dir":
-            return func(path=arguments["path"])
-        if name == "read_file":
-            return func(
-                path=arguments["path"],
-                start_line=arguments.get("start_line") or 1,
-                end_line=arguments.get("end_line"),
-            )
-        return func(**arguments)
-
     @staticmethod
     def _is_error_result(value: Any) -> bool:
         if isinstance(value, dict):
+            if value.get("error"):
+                return True
+            if value.get("ok") is False:
+                return True
             if "exit_code" in value:
                 return value.get("exit_code") not in (0, None)
-            if "error" in value and value.get("error"):
-                return True
         return False
 
     @staticmethod
@@ -750,8 +599,24 @@ class AntigravityMeshServer(object):
         return str(value)
 
 
+def _env_flag(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def configure_tools_from_env() -> None:
+    """Apply MESH_* environment settings to the shared tool module."""
+    mcp_tools.configure(
+        workspace=os.environ.get("MESH_WORKSPACE") or os.getcwd(),
+        read_only=_env_flag("MESH_READ_ONLY"),
+        write_roots=os.environ.get("MESH_WRITE_ROOTS") or None,
+        jobs_dir=os.environ.get("MESH_JOBS_DIR") or None,
+        max_output_chars=os.environ.get("MESH_MAX_OUTPUT_CHARS"),
+    )
+
+
 def create_mcp_server() -> AntigravityMeshServer:
     """Factory used by the HTTP handler and by the test-suite."""
+    configure_tools_from_env()
     return AntigravityMeshServer(name="antigravity_mesh")
 
 
