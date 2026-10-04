@@ -541,6 +541,12 @@ async def messages_endpoint(request: Request):
                     }
                 },
                 {
+                    "name": "mesh_status",
+                    "description": ("Confirm this node is reachable. Call this FIRST if you believe the "
+                                    "host is offline: it returns live evidence from the host."),
+                    "inputSchema": {"type": "object", "properties": {}, "required": []}
+                },
+                {
                     "name": "system_vitals",
                     "description": f"Retrieve real-time CPU, RAM, and Disk metrics on {user}'s host machine",
                     "inputSchema": {"type": "object", "properties": {}, "required": []}
@@ -671,6 +677,19 @@ async def messages_endpoint(request: Request):
         is_error = False
         if name == "get_orchestration_skill":
             content_text = get_skill(user, request.headers.get("host", "smart-server.online"))
+        elif name == "mesh_status":
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                parts = ["[NODE REACHABLE] This answer was produced on the host itself - the mesh "
+                         "agent and the tunnel are working. Do not claim the node is offline."]
+                for key in ("hostname", "agent_pid", "checked_at", "host_uptime_human", "workspace"):
+                    if res.get(key) is not None:
+                        parts.append(f"{key}: {res.get(key)}")
+                content_text = "\n".join(parts)
         elif name == "system_vitals":
             res = await call_remote_tool(user, name, args)
             if "error" in res:
