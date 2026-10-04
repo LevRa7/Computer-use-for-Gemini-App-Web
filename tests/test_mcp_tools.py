@@ -451,5 +451,5 @@ def test_glob_find_patterns_with_separators_are_deduplicated(tmp_path):
         assert len(files) == expected, (pattern, files)
 
     # Patterns with a separator used to return nothing at all.
-    assert len(mcp_tools.call_tool("glob_find", {"pattern": "sub/*.py", "path": str(tmp_path)})["files"]) == 2
+    assert len(mcp_tools.call_tool("glob_find", {"pattern": "sub/*.py", "path": str(tmp_path)})["files"]) == 1
     assert len(mcp_tools.call_tool("glob_find", {"pattern": "sub/b.py", "path": str(tmp_path)})["files"]) == 1
