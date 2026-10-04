@@ -243,8 +243,20 @@ def _paginate(full: str, cursor: Any, max_chars: int) -> Tuple[str, bool, Option
 
 
 def _atomic_write_bytes(target: str, data: bytes, mode: Optional[int] = None) -> None:
-    """Write *data* to *target* atomically (tmp file in the same dir + replace)."""
+    """Write *data* to *target* atomically (tmp file in the same dir + replace).
+
+    ``mkstemp`` creates the temporary file with mode 0600, so the mode has to be
+    set explicitly or an overwrite would silently strip a file's permissions
+    (e.g. make a launcher script non-executable). Precedence:
+    explicit ``mode`` > the mode of the file being replaced > 0644 for new files.
+    """
     parent = os.path.dirname(target) or "."
+    existing_mode = None
+    if mode is None:
+        try:
+            existing_mode = os.stat(target).st_mode & 0o7777
+        except OSError:
+            existing_mode = None
     fd, tmp = tempfile.mkstemp(prefix=".mcp-tmp-", dir=parent)
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -253,6 +265,10 @@ def _atomic_write_bytes(target: str, data: bytes, mode: Optional[int] = None) ->
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(tmp, mode)
+        elif existing_mode is not None:
+            os.chmod(tmp, existing_mode)
+        else:
+            os.chmod(tmp, 0o644)
         os.replace(tmp, target)
     except Exception:
         try:
@@ -518,8 +534,9 @@ def _tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
         end_line = args.get("end_line")
         end = min(len(lines), _safe_int(end_line, len(lines))) if end_line else len(lines)
         selected = lines[start_line - 1:end]
+        width = max(4, len(str(end)))  # keep the column stable for files >= 10000 lines
         content = "".join(
-            "%4d | %s" % (idx + start_line, line) for idx, line in enumerate(selected)
+            "%*d | %s" % (width, idx + start_line, line) for idx, line in enumerate(selected)
         )
         header = "File: %s (lines %d-%d of %d total)\n%s\n" % (
             target,
@@ -533,8 +550,8 @@ def _tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
         max_chars = _max_chars(args.get("max_chars"))
         cursor = max(0, _safe_int(args.get("cursor"), 0))
         chunk, truncated, next_cursor = _paginate(full, cursor, max_chars)
-        if truncated and next_cursor is not None:
-            chunk += "\n... продолжение: cursor=%d ..." % next_cursor
+        # No marker is appended inside the page: the text must stay byte-exact so
+        # a client can stitch pages using next_cursor. Callers surface that value.
 
         return {
             "stdout": chunk,
@@ -618,8 +635,15 @@ def _tool_edit_file(args: Dict[str, Any]) -> Dict[str, Any]:
             if str(expected).strip().lower() != current_sha:
                 return {"error": "file changed since read (sha256 mismatch)"}
 
-        text = raw.decode("utf-8", "replace")
-        count = text.count(old_string)
+        # Byte-level replacement: decoding with errors="replace" would silently
+        # corrupt non-UTF-8 files (0xff -> U+FFFD). Matching the raw bytes keeps
+        # the edit surgical for any encoding while old/new stay valid UTF-8.
+        try:
+            old_bytes = old_string.encode("utf-8")
+            new_bytes = new_string.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            return {"error": "old_string/new_string must be valid UTF-8 text: %s" % exc}
+        count = raw.count(old_bytes)
         if count == 0:
             return {"error": "old_string not found"}
         replace_all = _parse_bool(args.get("replace_all"))
@@ -628,11 +652,10 @@ def _tool_edit_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
         replacements = count if replace_all else 1
         if replace_all:
-            updated = text.replace(old_string, new_string)
+            data = raw.replace(old_bytes, new_bytes)
         else:
-            updated = text.replace(old_string, new_string, 1)
+            data = raw.replace(old_bytes, new_bytes, 1)
 
-        data = updated.encode("utf-8", "replace")
         _atomic_write_bytes(target, data)
         return {
             "ok": True,
@@ -759,7 +782,10 @@ def _tool_glob_find(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"error": "Path not found: %s" % base}
 
         found: List[str] = []
-        if "**" in pattern:
+        if "/" in pattern or "**" in pattern:
+            # Patterns containing a path separator must be matched against the
+            # path relative to `base` (sub/*.py, */b.py, sub/b.py, **/b.py);
+            # matching a bare basename against them always returned nothing.
             try:
                 found = _glob.glob(os.path.join(_glob.escape(base), pattern), recursive=True)
             except Exception as exc:
@@ -839,13 +865,35 @@ def _update_meta(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
         return meta
 
 
-def _pid_alive(pid: Any) -> bool:
+def _proc_start_time(pid: Any) -> Optional[int]:
+    """Start time of a process (field 22 of /proc/<pid>/stat), used to detect PID reuse."""
+    try:
+        with open("/proc/%d/stat" % int(pid), "rb") as handle:
+            data = handle.read()
+        rest = data.rsplit(b")", 1)[1].split()
+        return int(rest[19])
+    except Exception:
+        return None
+
+
+def _pid_alive(pid: Any, start_time: Any = None) -> bool:
     try:
         pid_int = int(pid)
     except (TypeError, ValueError):
         return False
     if pid_int <= 0:
         return False
+    # After a restart the in-memory entry is gone; without the start time a
+    # recycled PID would keep a finished job looking "running" forever.
+    if start_time is not None:
+        current = _proc_start_time(pid_int)
+        if current is None:
+            return False
+        try:
+            if int(start_time) != current:
+                return False
+        except (TypeError, ValueError):
+            pass
     try:
         os.kill(pid_int, 0)
     except ProcessLookupError:
@@ -899,7 +947,7 @@ def _refresh_meta(job_id: str, meta: Optional[Dict[str, Any]] = None) -> Optiona
             # subsequent file read cannot miss the tail of the output.
             for thread in entry.get("readers", []):
                 try:
-                    thread.join(timeout=2)
+                    thread.join(timeout=0.5)
                 except Exception:
                     pass
             status = "killed" if meta.get("status") == "killed" else "done"
@@ -911,7 +959,7 @@ def _refresh_meta(job_id: str, meta: Optional[Dict[str, Any]] = None) -> Optiona
                 finished_at=meta.get("finished_at") or _now_iso(),
             )
 
-        if not _pid_alive(meta.get("pid")):
+        if not _pid_alive(meta.get("pid"), meta.get("pid_start")):
             return _update_meta(
                 job_id,
                 status="done",
@@ -1010,7 +1058,7 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"error": "command is required and must be a non-empty string"}
 
         if len(_running_jobs()) >= MAX_RUNNING_JOBS:
-            return {"error": "too many running jobs"}
+            return {"error": "too many running jobs (limit %d)" % MAX_RUNNING_JOBS}
 
         cwd = None
         if args.get("cwd"):
@@ -1051,12 +1099,18 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
         for thread in readers:
             thread.start()
         started_mono = time.time()
-        _JOBS[job_id] = {"proc": proc, "readers": readers, "started_mono": started_mono}
+        _JOBS[job_id] = {
+            "proc": proc,
+            "readers": readers,
+            "started_mono": started_mono,
+            "pid_start": _proc_start_time(proc.pid),
+        }
 
         meta = {
             "job_id": job_id,
             "command": command,
             "pid": proc.pid,
+            "pid_start": _proc_start_time(proc.pid),
             "cwd": cwd,
             "started_at": started_at,
             "status": "running",
