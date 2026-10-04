@@ -407,7 +407,11 @@ def process_single_task(task: dict, data: dict, file_id: str, agy_bin: str, clie
     live_dir.mkdir(parents=True, exist_ok=True)
     live_log_file = live_dir / f"{task_id}.log"
     live_meta_file = live_dir / f"{task_id}.json"
-    live_url = f"https://levra7-ai.example.com/api/agy/live/{task_id}"
+    public_base_url = os.environ.get("AGY_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not public_base_url:
+        logger.warning("AGY_PUBLIC_BASE_URL is not set; live log links use the <your-domain> placeholder.")
+        public_base_url = "https://<your-domain>"
+    live_url = f"{public_base_url}/api/agy/live/{task_id}"
 
     created_at_str = task.get("created_at")
     queue_latency = None

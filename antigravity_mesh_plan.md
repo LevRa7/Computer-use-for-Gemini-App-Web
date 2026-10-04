@@ -1,6 +1,6 @@
 📋 Antigravity Mesh: Пошаговый TDD-план реализации коробочного решения
 Цель и глобальные требования
-* Цель: Полная реализация и развёртывание модульного коробочного решения Antigravity Mesh на целевом узле workstation (100.64.0.10).
+* Цель: Полная реализация и развёртывание модульного коробочного решения Antigravity Mesh на целевом узле <workstation-host> (<workstation-ip>).
 * Методология: Superpowers Subagent-Driven Development (TDD: Тест -> Провал -> Реализация -> Успех -> Коммит).
 * Без плейсхолдеров: Все команды, пути и логика должны быть полностью специфицированы.
 
@@ -9,7 +9,7 @@ ________________
 
 
 Task 1: Инициализация рабочего пространства и окружения [✅ ВЫПОЛНЕНО]
-* Целевой узел: workstation (~/MyProjects/antigravity-mesh/)
+* Целевой узел: <workstation-host> (~/MyProjects/antigravity-mesh/)
 * [x] Шаг 1: Развёртывание дистрибутива из архива antigravity-mesh-v1.0.0.tar.gz.
 * [x] Шаг 2: Инициализация Git-репозитория и структуры каталогов (core/, skills/, templates/, tests/, docs/).
 * [x] Шаг 3: Настройка виртуального окружения Python (requirements.txt: FastMCP/Starlette, Uvicorn, Pytest, Jinja2).
@@ -60,7 +60,7 @@ ________________
 
 
 Task 5: Сквозная верификация и релиз v1.0.0 [✅ ВЫПОЛНЕНО]
-* Целевой узел: workstation (100.64.0.10)
+* Целевой узел: <workstation-host> (<workstation-ip>)
 * [x] Шаг 1: Полный запуск тестового набора: pytest tests/ -v (5 passed in 0.02s).
 * [x] Шаг 2: Прогон bash install.sh --dry-run --mode=standalone --tls=none --port=8096 (DRY-RUN OK).
 * [x] Шаг 3: Фиксация релизного тега: git tag -a v1.0.0 -m "Production release v1.0.0".

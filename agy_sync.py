@@ -15,6 +15,7 @@ import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,6 +23,31 @@ TOKEN_FILE = BASE_DIR / "token.json"
 FACTS_FILE = BASE_DIR / "server_facts.json"
 PROFILE_FILE = BASE_DIR / "server_profile.md"
 LOG_FILE = BASE_DIR / "agy_sync.log"
+
+# Public infrastructure identifiers are read from the environment ONLY.
+# Set GATEWAY_HOST_IP (gateway public IP), GATEWAY_HOSTNAME, AGY_PUBLIC_BASE_URL
+# (e.g. https://mesh.example.com) and MATEBOOK_IP / DEBIAN_IP / RACKNERD2_IP
+# (alias RACKNERD_IP) in the service environment. Neutral placeholders are
+# emitted when a variable is missing so generated facts never leak real hosts.
+GATEWAY_HOST_IP = os.environ.get("GATEWAY_HOST_IP", "").strip()
+GATEWAY_HOSTNAME = os.environ.get("GATEWAY_HOSTNAME", "").strip()
+AGY_PUBLIC_BASE_URL = os.environ.get("AGY_PUBLIC_BASE_URL", "").strip().rstrip("/")
+MATEBOOK_IP = os.environ.get("MATEBOOK_IP", "").strip()
+MATEBOOK_USER = os.environ.get("MATEBOOK_USER", "").strip()
+DEBIAN_IP = os.environ.get("DEBIAN_IP", "").strip()
+RACKNERD2_IP = (os.environ.get("RACKNERD2_IP") or os.environ.get("RACKNERD_IP") or "").strip()
+
+
+def _public_base_url() -> str:
+    """Public HTTPS base URL or a neutral placeholder."""
+    return AGY_PUBLIC_BASE_URL or "https://<your-domain>"
+
+
+def _public_domain() -> str:
+    """Bare public domain derived from AGY_PUBLIC_BASE_URL, or a placeholder."""
+    if not AGY_PUBLIC_BASE_URL:
+        return "<your-domain>"
+    return urlparse(AGY_PUBLIC_BASE_URL).netloc or AGY_PUBLIC_BASE_URL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -190,9 +216,9 @@ def collect_server_facts() -> dict:
         "schema_version": "1.0",
         "synchronized_at": now_utc,
         "primary_server": {
-            "hostname": os.uname().nodename,
-            "public_ip": "100.64.0.31",
-            "domain": "levra7-ai.example.com",
+            "hostname": GATEWAY_HOSTNAME or "<hostname>",
+            "public_ip": GATEWAY_HOST_IP or "<gateway-ip>",
+            "domain": _public_domain(),
             "tailscale_ip": "100.64.0.1",
             "os": "Ubuntu 22.04.5 LTS",
             "kernel": os.uname().release,
@@ -211,41 +237,44 @@ def collect_server_facts() -> dict:
         },
         "known_remote_nodes": [
             {
-                "name": "workstation-host",
-                "hostname": "workstation-host",
-                "tailscale_ip": "100.64.0.10",
-                "ssh_user": "lev",
+                "name": "<workstation-host>",
+                "hostname": "<workstation-host>",
+                "tailscale_ip": MATEBOOK_IP or "<workstation-ip>",
+                "ssh_user": MATEBOOK_USER or "<ssh-user>",
                 "auth_type": "password",
+                "mcp_tool": "matebook_exec",
                 "os": "Debian GNU/Linux 13 (trixie)",
                 "cpu": "AMD Ryzen 7 5800H (16 vCPU)",
                 "ram": "14 GiB",
                 "role": "Desktop Workstation & AI Development",
-                "ssh_command_example": "sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'"
+                "ssh_command_example": f"sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no {MATEBOOK_USER or '<ssh-user>'}@{MATEBOOK_IP or '<workstation-ip>'} '<cmd>'"
             },
             {
-                "name": "compute-node",
-                "hostname": "debian",
-                "tailscale_ip": "100.64.0.20",
+                "name": "<compute-host>",
+                "hostname": "<compute-host>",
+                "tailscale_ip": DEBIAN_IP or "<compute-ip>",
                 "ssh_user": "root",
                 "auth_type": "password",
+                "mcp_tool": "debian_exec",
                 "os": "Debian GNU/Linux 13 (trixie)",
                 "cpu": "AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)",
                 "ram": "62 GiB",
                 "role": "Heavy Compute & VM Host (QEMU / Antigravity / AI Services)",
-                "ssh_command_example": "sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'"
+                "ssh_command_example": f"sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@{DEBIAN_IP or '<compute-ip>'} '<cmd>'"
             },
             {
-                "name": "vps-host",
-                "hostname": "vps-host",
-                "public_ip": "100.64.0.30",
+                "name": "<vps-host>",
+                "hostname": "<vps-host>",
+                "public_ip": RACKNERD2_IP or "<vps-ip>",
                 "tailscale_ip": "100.64.0.2",
                 "ssh_user": "root",
                 "auth_type": "password",
-                "os": "Linux (RackNerd)",
+                "mcp_tool": "racknerd2_exec",
+                "os": "Linux (VPS)",
                 "cpu": "1 vCPU",
                 "ram": "2 GiB",
                 "role": "Secondary VPS Node & Exit Node",
-                "ssh_command_example": "sshpass -p '$RACKNERD2_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.30 '<cmd>'"
+                "ssh_command_example": f"sshpass -p '$RACKNERD2_PASS' ssh -o StrictHostKeyChecking=no root@{RACKNERD2_IP or '<vps-ip>'} '<cmd>'"
             }
         ],
         "tailscale_topology": tailscale_peers
@@ -295,26 +324,26 @@ def generate_profile_markdown(facts: dict) -> str:
         md.append(f"- **Пользователь SSH:** **`{node['ssh_user']}`** *(Внимание: логин именно `{node['ssh_user']}`, не `me`!)*")
         md.append(f"- **ОС:** `{node['os']}` | **CPU:** `{node['cpu']}` | **RAM:** `{node['ram']}`")
         md.append(f"- **Назначение:** {node['role']}")
-        mcp_fn = "debian_exec" if "debian" in node['name'] else "matebook_exec"
+        mcp_fn = node.get("mcp_tool", "matebook_exec")
         md.append(f"- **Нативный вызов через MCP:** `{mcp_fn}('<команда>')`")
         md.append(f"- **Команда SSH на VPS хосте:** `{node['ssh_command_example']}` *(Примечание: прямой SSH из Gemini невозможен!)*")
         md.append("")
     md.append("---")
     md.append("")
     md.append("## 3. Регламент оркестрации и выполнения команд (Web-Gemini)")
-    md.append("> 🚨 **МАНДАТ:** Все команды, чтение/запись файлов и телеметрия выполняются **ИСКЛЮЧИТЕЛЬНО НАПРЯМУЮ ЧЕРЕЗ API / MCP** (`https://levra7-ai.example.com/sse`). Google Диск используется **ТОЛЬКО** в случае, если необходимо передать пользователю файл, документ или архив. Создавать файлы очередей в Google Диске для обычных команд ЗАПРЕЩЕНО.")
+    md.append(f"> 🚨 **МАНДАТ:** Все команды, чтение/запись файлов и телеметрия выполняются **ИСКЛЮЧИТЕЛЬНО НАПРЯМУЮ ЧЕРЕЗ API / MCP** (`{_public_base_url()}/sse`). Google Диск используется **ТОЛЬКО** в случае, если необходимо передать пользователю файл, документ или архив. Создавать файлы очередей в Google Диске для обычных команд ЗАПРЕЩЕНО.")
     md.append("")
     md.append("### ⛔ Антипаттерны и запреты:")
     md.append("1. 🚫 **Прямой SSH из браузера Gemini ЗАПРЕЩЁН:** В песочнице Google нет Tailscale. Прямой SSH всегда завершится ошибкой. Используйте инструменты `bash_exec`, `debian_exec`, `matebook_exec`.")
     md.append("2. 🚫 **Google Search для API ЗАПРЕЩЁН:** Поисковик не может опрашивать динамический API и блокируется шлюзом с 403-й ошибкой.")
     md.append("3. 🚫 **Браузер («Компьютер») ЗАПРЕЩЁН:** Не подходит для вызова API.")
     md.append("4. 🚫 **Перезапись файлов в Google Drive ЗАПРЕЩЕНА:** В Gemini нет `update_file`.")
-    md.append("5. 🚫 **Обращение по прямому IP `100.64.0.31`:** Сертификат SSL привязан строго к домену `levra7-ai.example.com`.")
+    md.append(f"5. 🚫 **Обращение по прямому IP `{GATEWAY_HOST_IP or '<gateway-ip>'}`:** Сертификат SSL привязан строго к домену `{_public_domain()}`.")
     md.append("")
     md.append("### 🛠️ Нативные инструменты MCP (Gemini Web Spark):")
-    md.append("- `bash_exec(command)`: моментальный запуск команд на VPS (`vps2-host`).")
-    md.append("- `debian_exec(command)`: ресурсоёмкие вычисления и тесты на **AMD Ryzen 9 5950X / 64GB RAM** (`100.64.0.20`).")
-    md.append("- `matebook_exec(command)`: команды и кодинг-агент на **workstation** (`100.64.0.10`).")
+    md.append("- `bash_exec(command)`: моментальный запуск команд на VPS (`<vps-host>`).")
+    md.append(f"- `debian_exec(command)`: ресурсоёмкие вычисления и тесты на **AMD Ryzen 9 5950X / 64GB RAM** (`{DEBIAN_IP or '<compute-ip>'}`).")
+    md.append(f"- `matebook_exec(command)`: команды и кодинг-агент на **workstation** (`{MATEBOOK_IP or '<workstation-ip>'}`).")
     md.append("- `system_vitals()`, `matebook_vitals()`: мгновенная телеметрия.")
     md.append("- `read_file(path, start_line, end_line)`: чтение любых файлов на сервере.")
     md.append("- `write_file(path, content)`: создание и модификация файлов на сервере.")

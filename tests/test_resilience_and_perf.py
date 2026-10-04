@@ -21,7 +21,7 @@ def test_remote_execution_timeout_resilience():
     import subprocess
 
     def simulate_timeout_command(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=["ssh", "<ssh-user>@<host-ip>"], timeout=12)
+        raise subprocess.TimeoutExpired(cmd=["ssh", "<ssh-user>@<workstation-ip>"], timeout=12)
 
     with patch("subprocess.run", side_effect=simulate_timeout_command):
         try:

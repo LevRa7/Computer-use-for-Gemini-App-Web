@@ -34,7 +34,7 @@ async def test_policy_restricts_workspaces():
 
     # Inside allowed workspaces
     assert validate_workspace_path("/root/agy-gdrive-runner/core/schemas.py") is True
-    assert validate_workspace_path("~/MyProjects/antigravity-mesh/README.md") is True
+    assert validate_workspace_path("/root/antigravity-mesh/README.md") is True
 
     # Outside allowed workspaces
     assert validate_workspace_path("/etc/passwd") is False

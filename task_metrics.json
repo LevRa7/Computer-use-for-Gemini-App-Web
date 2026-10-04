@@ -9,10 +9,10 @@
     "total_runner_time_seconds": 3.87,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788712026",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788712026",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'cp -f ~/MyProjects/antigravity-mesh/server_profile.md ~/MyProjects/antigravity-mesh/antigravity_mesh_spec.md && cp -f ~/MyProjects/antigravity-mesh/SUBAGENT_MESH_SKILL.md ~/MyProjects/antigravity-mesh/antigravity_mesh_plan.md && mkdir -p ~/MyProjects/antigravity-mesh/docs && cp -f ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md ~/MyProjects/antigravity-mesh/docs/ && ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'cp -f ~/MyProjects/antigravity-mesh/server_profile.md ~/MyProjects/antigravity-mesh/antigravity_mesh_spec.md && cp -f ~/MyProjects/antigravity-mesh/SUBAGENT_MESH_SKILL.md ~/MyProjects/antigravity-mesh/antigravity_mesh_plan.md && mkdir -p ~/MyProjects/antigravity-mesh/docs && cp -f ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md ~/MyProjects/antigravity-mesh/docs/ && ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
         "exit_code": 0,
         "duration_seconds": 1.98
       }
@@ -29,10 +29,10 @@
     "total_runner_time_seconds": 3.92,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788711998",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788711998",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> touch ~/MyProjects/antigravity-mesh/antigravity_mesh_spec.md ~/MyProjects/antigravity-mesh/antigravity_mesh_plan.md",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 touch ~/MyProjects/antigravity-mesh/antigravity_mesh_spec.md ~/MyProjects/antigravity-mesh/antigravity_mesh_plan.md",
         "exit_code": 0,
         "duration_seconds": 2.07
       }
@@ -49,10 +49,10 @@
     "total_runner_time_seconds": 3.85,
     "status": "failed",
     "exit_code": 2,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788711970",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788711970",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
         "exit_code": 2,
         "duration_seconds": 1.9
       }
@@ -69,10 +69,10 @@
     "total_runner_time_seconds": 3.98,
     "status": "failed",
     "exit_code": 2,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788711884",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788711884",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'ls -lh ~/MyProjects/antigravity-mesh/antigravity_mesh_*.md'",
         "exit_code": 2,
         "duration_seconds": 1.92
       }
@@ -89,10 +89,10 @@
     "total_runner_time_seconds": 4.9,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788711525",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788711525",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'ls -lh ~/MyProjects/antigravity-mesh/'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'ls -lh ~/MyProjects/antigravity-mesh/'",
         "exit_code": 0,
         "duration_seconds": 2.14
       }
@@ -109,10 +109,10 @@
     "total_runner_time_seconds": 4.66,
     "status": "failed",
     "exit_code": 2,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700007",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700007",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> bash << 'EOF_REMOTE'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 bash << 'EOF_REMOTE'",
         "exit_code": 0,
         "duration_seconds": 2.64
       },
@@ -149,10 +149,10 @@
     "total_runner_time_seconds": 4.43,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700006",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700006",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'cd ~/MyProjects/antigravity-mesh && if [ -d agy-gdrive-runner ]; then cp -rn agy-gdrive-runner/* . 2>/dev/null || true; fi && mkdir -p docs && (cp -f docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || true) && (cp -f docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || true) && echo \"=== SPEC AND PLAN FILES ===\" && ls -la antigravity_mesh_spec.md antigravity_mesh_plan.md && echo \"=== GIT STATUS ===\" && git add . 2>/dev/null && git commit -m \"docs: record architecture spec and TDD plan\" 2>/dev/null || true; git status -s'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'cd ~/MyProjects/antigravity-mesh && if [ -d agy-gdrive-runner ]; then cp -rn agy-gdrive-runner/* . 2>/dev/null || true; fi && mkdir -p docs && (cp -f docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/specs/*.md ./antigravity_mesh_spec.md 2>/dev/null || true) && (cp -f docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || cp -f agy-gdrive-runner/docs/superpowers/plans/*.md ./antigravity_mesh_plan.md 2>/dev/null || true) && echo \"=== SPEC AND PLAN FILES ===\" && ls -la antigravity_mesh_spec.md antigravity_mesh_plan.md && echo \"=== GIT STATUS ===\" && git add . 2>/dev/null && git commit -m \"docs: record architecture spec and TDD plan\" 2>/dev/null || true; git status -s'",
         "exit_code": 0,
         "duration_seconds": 2.44
       }
@@ -169,10 +169,10 @@
     "total_runner_time_seconds": 649.86,
     "status": "failed",
     "exit_code": -9,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700005",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700005",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'tar -tf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz | head -n 15; echo \"=== LOCATING PYTEST ===\"; find ~ -name pytest 2>/dev/null | head -n 10; echo \"=== VENV PYTHON ===\"; ~/MyProjects/.venv/bin/python3 --version 2>&1 || true; ls -la ~/MyProjects/.venv/bin/'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'tar -tf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz | head -n 15; echo \"=== LOCATING PYTEST ===\"; find ~ -name pytest 2>/dev/null | head -n 10; echo \"=== VENV PYTHON ===\"; ~/MyProjects/.venv/bin/python3 --version 2>&1 || true; ls -la ~/MyProjects/.venv/bin/'",
         "exit_code": -9,
         "duration_seconds": 647.71
       }
@@ -189,10 +189,10 @@
     "total_runner_time_seconds": 3.95,
     "status": "failed",
     "exit_code": 127,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700004",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700004",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'mkdir -p ~/MyProjects/antigravity-mesh && tar -xzf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz -C ~/MyProjects/antigravity-mesh && cd ~/MyProjects/antigravity-mesh && git init 2>/dev/null || true && echo \"=== STRUCTURE ===\" && ls -la && echo \"=== RUNNING TESTS ===\" && (python3 -m pytest tests/ -v 2>&1 || ../.venv/bin/pytest tests/ -v 2>&1 || pytest tests/ -v 2>&1) && echo \"=== TESTING INSTALLER DRY RUN ===\" && bash install.sh --dry-run --mode=standalone --tls=none --port=8096'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'mkdir -p ~/MyProjects/antigravity-mesh && tar -xzf ~/MyProjects/antigravity-mesh-v1.0.0.tar.gz -C ~/MyProjects/antigravity-mesh && cd ~/MyProjects/antigravity-mesh && git init 2>/dev/null || true && echo \"=== STRUCTURE ===\" && ls -la && echo \"=== RUNNING TESTS ===\" && (python3 -m pytest tests/ -v 2>&1 || ../.venv/bin/pytest tests/ -v 2>&1 || pytest tests/ -v 2>&1) && echo \"=== TESTING INSTALLER DRY RUN ===\" && bash install.sh --dry-run --mode=standalone --tls=none --port=8096'",
         "exit_code": 127,
         "duration_seconds": 2.17
       }
@@ -209,10 +209,10 @@
     "total_runner_time_seconds": 8.93,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700003",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700003",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'mkdir -p ~/MyProjects' && tar -czf /tmp/antigravity-mesh-latest.tar.gz -C /root agy-gdrive-runner && sshpass -p '<REDACTED>' scp -o StrictHostKeyChecking=no /tmp/antigravity-mesh-latest.tar.gz <ssh-user>@<host-ip>:~/MyProjects/ && sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> 'ls -la ~/MyProjects'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'mkdir -p ~/MyProjects' && tar -czf /tmp/antigravity-mesh-latest.tar.gz -C /root agy-gdrive-runner && sshpass -p '<REDACTED>' scp -o StrictHostKeyChecking=no /tmp/antigravity-mesh-latest.tar.gz <ssh-user>@100.64.0.10:~/MyProjects/ && sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@100.64.0.10 'ls -la ~/MyProjects'",
         "exit_code": 0,
         "duration_seconds": 7.05
       }
@@ -229,10 +229,10 @@
     "total_runner_time_seconds": 6.86,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788700001",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788700001",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.20 \"echo '=== SYSTEM INFO ==='; hostnamectl; echo '=== CPU INFO ==='; lscpu | grep -E 'Model name|CPU\\(s\\):|Thread\\(s\\) per core|Core\\(s\\) per socket'; echo '=== MEMORY INFO ==='; free -h; echo '=== DISK INFO ==='; df -h /; echo '=== TOP PROCESSES BY CPU ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%cpu | head -n 12; echo '=== TOP PROCESSES BY MEM ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%mem | head -n 12\"",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.11 \"echo '=== SYSTEM INFO ==='; hostnamectl; echo '=== CPU INFO ==='; lscpu | grep -E 'Model name|CPU\\(s\\):|Thread\\(s\\) per core|Core\\(s\\) per socket'; echo '=== MEMORY INFO ==='; free -h; echo '=== DISK INFO ==='; df -h /; echo '=== TOP PROCESSES BY CPU ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%cpu | head -n 12; echo '=== TOP PROCESSES BY MEM ==='; ps -eo pid,user,%cpu,%mem,stat,time,comm --sort=-%mem | head -n 12\"",
         "exit_code": 0,
         "duration_seconds": 4.78
       }
@@ -249,10 +249,10 @@
     "total_runner_time_seconds": 6.45,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_1788692002",
+    "live_url": "https://<your-domain>/api/agy/live/task_1788692002",
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.20 'uptime && free -h && df -h && ps -eo pid,user,%cpu,%mem,comm --sort=-%mem | head -n 12'",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.11 'uptime && free -h && df -h && ps -eo pid,user,%cpu,%mem,comm --sort=-%mem | head -n 12'",
         "exit_code": 0,
         "duration_seconds": 4.33
       }
@@ -269,10 +269,10 @@
     "total_runner_time_seconds": 10.3,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_test_live_1788698154",
+    "live_url": "https://<your-domain>/api/agy/live/task_test_live_1788698154",
     "commands": [
       {
-        "command": "sshpass -p <REDACTED> ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.64.0.20 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
+        "command": "sshpass -p <REDACTED> ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.64.0.11 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
         "exit_code": 0,
         "duration_seconds": 8.6
       }
@@ -289,10 +289,10 @@
     "total_runner_time_seconds": 3.83,
     "status": "completed",
     "exit_code": 0,
-    "live_url": "https://levra7-ai.example.com/api/agy/live/task_test_live_1788696011",
+    "live_url": "https://<your-domain>/api/agy/live/task_test_live_1788696011",
     "commands": [
       {
-        "command": "sshpass -p <REDACTED> ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.64.0.20 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
+        "command": "sshpass -p <REDACTED> ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.64.0.11 \"hostname; uname -a; uptime; free -h; df -h /; lscpu | grep 'Model name'\"",
         "exit_code": 0,
         "duration_seconds": 1.93
       }
@@ -311,7 +311,7 @@
     "exit_code": 0,
     "commands": [
       {
-        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.20 \"hostname; uname -a; lscpu | grep 'Model name'; free -h; df -h /; uptime\"",
+        "command": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.11 \"hostname; uname -a; lscpu | grep 'Model name'; free -h; df -h /; uptime\"",
         "exit_code": 0,
         "duration_seconds": 4.04
       }

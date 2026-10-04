@@ -11,4 +11,6 @@ win11_screen.png
 .state/
 registry.json
 *.tar.gz
-gateway.py
+# gateway.py is the deployed cloud gateway source (also mirrored to the VPS).
+# It is tracked on purpose: without it the published repo cannot run a gateway.
+# Never commit registry.json or *.env next to it - those hold live tokens.

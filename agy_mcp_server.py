@@ -32,9 +32,16 @@ from mcp.server.transport_security import TransportSecuritySettings
 from gdrive_client import GDriveClient
 
 BASE_DIR = Path(__file__).resolve().parent
-DEBIAN_IP = "100.64.0.20"
-MATEBOOK_IP = "100.64.0.10"
-RACKNERD2_IP = "100.64.0.30"
+
+# Remote host addresses are read from the environment ONLY -- never hardcode them.
+# Set MATEBOOK_IP / DEBIAN_IP / RACKNERD2_IP (alias: RACKNERD_IP) in the service
+# environment. Every command function below returns a clear error when its host
+# variable is missing instead of connecting to an empty address.
+DEBIAN_IP = os.environ.get("DEBIAN_IP", "").strip()
+MATEBOOK_IP = os.environ.get("MATEBOOK_IP", "").strip()
+RACKNERD2_IP = (os.environ.get("RACKNERD2_IP") or os.environ.get("RACKNERD_IP") or "").strip()
+MATEBOOK_USER = os.environ.get("MATEBOOK_USER", "").strip()
+MATEBOOK_HOME = os.environ.get("MATEBOOK_HOME", "").strip()
 PROBE_LOG = BASE_DIR / "mcp_requests.log"
 
 # SSH credentials are read from the environment ONLY -- never hardcode secrets.
@@ -49,7 +56,9 @@ logger = logging.getLogger("agy_mcp")
 # Tool functions
 def racknerd2_exec(command: str) -> str:
     if not RACKNERD2_PASS:
-        return "[RackNerd-5a24bf9 | Error]: RACKNERD2_PASS environment variable is not set (hardcoded credentials removed)."
+        return "[VPS Node | Error]: RACKNERD2_PASS environment variable is not set (hardcoded credentials removed)."
+    if not RACKNERD2_IP:
+        return "[VPS Node | Error]: RACKNERD2_IP environment variable is not set (hardcoded host addresses removed)."
     t0 = time.time()
     ssh_cmd = [
         "sshpass", "-p", RACKNERD2_PASS, "ssh",
@@ -69,11 +78,11 @@ def racknerd2_exec(command: str) -> str:
             if err_f:
                 parts.append(f"[STDERR]\n{err_f}")
         body = "\n\n".join(parts) if parts else "(no output)"
-        return f"[RackNerd-5a24bf9 100.64.0.30 | Exit: {proc.returncode} in {duration}s]\n{body}"
+        return f"[VPS Node {RACKNERD2_IP} | Exit: {proc.returncode} in {duration}s]\n{body}"
     except subprocess.TimeoutExpired:
-        return "[RackNerd-5a24bf9 | Error]: Command timed out after 120s."
+        return "[VPS Node | Error]: Command timed out after 120s."
     except Exception as e:
-        return f"[RackNerd-5a24bf9 | Error]: {e}"
+        return f"[VPS Node | Error]: {e}"
 
 def bash_exec(command: str) -> str:
     t0 = time.time()
@@ -96,7 +105,9 @@ def bash_exec(command: str) -> str:
 
 def debian_exec(command: str) -> str:
     if not DEBIAN_PASS:
-        return "[Debian Node 100.64.0.20 | Error]: DEBIAN_PASS environment variable is not set (hardcoded credentials removed)."
+        return "[Debian Node | Error]: DEBIAN_PASS environment variable is not set (hardcoded credentials removed)."
+    if not DEBIAN_IP:
+        return "[Debian Node | Error]: DEBIAN_IP environment variable is not set (hardcoded host addresses removed)."
     t0 = time.time()
     ssh_cmd = [
         "sshpass", "-p", DEBIAN_PASS, "ssh",
@@ -116,20 +127,24 @@ def debian_exec(command: str) -> str:
             if err_f:
                 parts.append(f"[STDERR]\n{err_f}")
         body = "\n\n".join(parts) if parts else "(no output)"
-        return f"[Debian Node 100.64.0.20 | Exit: {proc.returncode} in {duration}s]\n{body}"
+        return f"[Debian Node {DEBIAN_IP} | Exit: {proc.returncode} in {duration}s]\n{body}"
     except subprocess.TimeoutExpired:
-        return "[Debian Node 100.64.0.20 | Error]: Command timed out after 180s."
+        return "[Debian Node | Error]: Command timed out after 180s."
     except Exception as e:
-        return f"[Debian Node 100.64.0.20 | Error]: {e}"
+        return f"[Debian Node | Error]: {e}"
 
 def matebook_exec(command: str) -> str:
     if not MATEBOOK_PASS:
-        return "[workstation | Error]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
+        return "[Workstation | Error]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
+    if not MATEBOOK_IP:
+        return "[Workstation | Error]: MATEBOOK_IP environment variable is not set (hardcoded host addresses removed)."
+    if not MATEBOOK_USER:
+        return "[Workstation | Error]: MATEBOOK_USER environment variable is not set (hardcoded SSH user removed)."
     t0 = time.time()
     ssh_cmd = [
         "sshpass", "-p", MATEBOOK_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
-        f"lev@{MATEBOOK_IP}", command
+        f"{MATEBOOK_USER}@{MATEBOOK_IP}", command
     ]
     try:
         proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
@@ -144,11 +159,11 @@ def matebook_exec(command: str) -> str:
             if err_f:
                 parts.append(f"[STDERR]\n{err_f}")
         body = "\n\n".join(parts) if parts else "(no output)"
-        return f"[workstation 100.64.0.10 | Exit: {proc.returncode} in {duration}s]\n{body}"
+        return f"[Workstation {MATEBOOK_IP} | Exit: {proc.returncode} in {duration}s]\n{body}"
     except subprocess.TimeoutExpired:
-        return "[workstation | Error]: Command timed out after 120s."
+        return "[Workstation | Error]: Command timed out after 120s."
     except Exception as e:
-        return f"[workstation | Error]: {e}"
+        return f"[Workstation | Error]: {e}"
 
 def system_vitals() -> str:
     from core.server import get_coordinator_vitals
@@ -157,25 +172,29 @@ def system_vitals() -> str:
 
 def matebook_vitals() -> str:
     if not MATEBOOK_PASS:
-        return "[workstation]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
+        return "[Workstation]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
+    if not MATEBOOK_IP:
+        return "[Workstation]: MATEBOOK_IP environment variable is not set (hardcoded host addresses removed)."
+    if not MATEBOOK_USER:
+        return "[Workstation]: MATEBOOK_USER environment variable is not set (hardcoded SSH user removed)."
     ssh_cmd = [
         "sshpass", "-p", MATEBOOK_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=8",
-        f"lev@{MATEBOOK_IP}",
+        f"{MATEBOOK_USER}@{MATEBOOK_IP}",
         "uptime; free -h | grep Mem; cat /sys/class/power_supply/BAT*/capacity 2>/dev/null; cat /sys/class/power_supply/BAT*/status 2>/dev/null"
     ]
     try:
         proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=12)
         if proc.returncode != 0:
-            return f"[workstation]: Offline or unreachable (Exit: {proc.returncode})"
+            return f"[Workstation]: Offline or unreachable (Exit: {proc.returncode})"
         lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
         uptime_line = lines[0] if len(lines) > 0 else "unknown"
         mem_line = lines[1] if len(lines) > 1 else "unknown"
         bat_cap = lines[2] + "%" if len(lines) > 2 and lines[2].isdigit() else "unknown"
         bat_stat = lines[3] if len(lines) > 3 else "unknown"
-        return f"workstation Status:\n  Uptime: {uptime_line}\n  RAM: {mem_line}\n  Battery: {bat_cap} ({bat_stat})"
+        return f"Workstation Status:\n  Uptime: {uptime_line}\n  RAM: {mem_line}\n  Battery: {bat_cap} ({bat_stat})"
     except Exception as e:
-        return f"[workstation Error]: {e}"
+        return f"[Workstation Error]: {e}"
 
 def read_file(path: str, start_line: int = 1, end_line: int = 100) -> str:
     p = Path(path)
@@ -255,30 +274,38 @@ def gdrive_copy(file_name_or_id: str, dest_path: str, target_node: str = "vps") 
         elif target_node in ("matebook", "matebook16"):
             if not MATEBOOK_PASS:
                 return "[Google Drive | Error]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
+            if not MATEBOOK_IP:
+                return "[Google Drive | Error]: MATEBOOK_IP environment variable is not set (hardcoded host addresses removed)."
+            if not MATEBOOK_USER:
+                return "[Google Drive | Error]: MATEBOOK_USER environment variable is not set (hardcoded SSH user removed)."
             dest_clean = dest_path.strip()
             if dest_clean.startswith("~/"):
-                dest_clean = "~/" + dest_clean[2:]
+                if not MATEBOOK_HOME:
+                    return "[Google Drive | Error]: MATEBOOK_HOME environment variable is not set (hardcoded home path removed); use an absolute dest_path."
+                dest_clean = MATEBOOK_HOME.rstrip("/") + "/" + dest_clean[2:]
             elif dest_clean == "~":
-                dest_clean = "~"
+                if not MATEBOOK_HOME:
+                    return "[Google Drive | Error]: MATEBOOK_HOME environment variable is not set (hardcoded home path removed); use an absolute dest_path."
+                dest_clean = MATEBOOK_HOME
             parent_dir = str(Path(dest_clean).parent)
             if parent_dir and parent_dir != ".":
                 subprocess.run([
                     "sshpass", "-p", MATEBOOK_PASS, "ssh",
                     "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
-                    f"lev@{MATEBOOK_IP}", f"mkdir -p '{parent_dir}'"
+                    f"{MATEBOOK_USER}@{MATEBOOK_IP}", f"mkdir -p '{parent_dir}'"
                 ], capture_output=True, timeout=15)
             scp_cmd = [
                 "sshpass", "-p", MATEBOOK_PASS, "scp",
                 "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
-                str(tmp_target), f"lev@{MATEBOOK_IP}:{dest_clean}"
+                str(tmp_target), f"{MATEBOOK_USER}@{MATEBOOK_IP}:{dest_clean}"
             ]
             proc = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
             duration = round(time.time() - t0, 2)
             if proc.returncode == 0:
-                return f"[Exit code: 0 in {duration}s]\nSuccessfully copied '{actual_file_name}' ({file_size} bytes) from Google Drive to workstation: {dest_clean}"
+                return f"[Exit code: 0 in {duration}s]\nSuccessfully copied '{actual_file_name}' ({file_size} bytes) from Google Drive to the workstation: {dest_clean}"
             else:
                 err_clean = "\n".join(l for l in proc.stderr.splitlines() if "Permanently added" not in l).strip()
-                return f"[workstation | Exit: {proc.returncode} in {duration}s]\n[STDERR]\n{err_clean}"
+                return f"[Workstation | Exit: {proc.returncode} in {duration}s]\n[STDERR]\n{err_clean}"
         elif target_node in ("debian", "ryzen", "5950x"):
             if not DEBIAN_PASS:
                 return "[Google Drive | Error]: DEBIAN_PASS environment variable is not set (hardcoded credentials removed)."
@@ -377,7 +404,7 @@ TOOLS_DEFINITIONS = [
     },
     {
         "name": "matebook_exec",
-        "title": "Execute Bash on Matebook Node",
+        "title": "Execute Bash on Workstation Node",
         "description": "Executes a bash command on the developer workstation node.",
         "inputSchema": {
             "type": "object",
@@ -410,7 +437,7 @@ TOOLS_DEFINITIONS = [
     },
     {
         "name": "matebook_vitals",
-        "title": "Matebook Vitals",
+        "title": "Workstation Vitals",
         "description": "Returns battery percentage, power status, RAM and uptime for the developer workstation.",
         "inputSchema": {
             "type": "object",

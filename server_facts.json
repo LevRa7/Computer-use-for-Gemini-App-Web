@@ -2,9 +2,9 @@
   "schema_version": "1.0",
   "synchronized_at": "2026-09-06T17:12:22.563785+00:00",
   "primary_server": {
-    "hostname": "vps2-host",
-    "public_ip": "100.64.0.31",
-    "domain": "levra7-ai.example.com",
+    "hostname": "<hostname>",
+    "public_ip": "100.64.0.13",
+    "domain": "<your-domain>",
     "tailscale_ip": "100.64.0.1",
     "os": "Ubuntu 22.04.5 LTS",
     "kernel": "5.15.0-190-generic",
@@ -49,125 +49,125 @@
   },
   "known_remote_nodes": [
     {
-      "name": "workstation-host",
-      "hostname": "workstation-host",
+      "name": "<workstation-host>",
+      "hostname": "<workstation-host>",
       "tailscale_ip": "100.64.0.10",
-      "ssh_user": "lev",
+      "ssh_user": "<ssh-user>",
       "auth_type": "password",
       "os": "Debian GNU/Linux 13 (trixie)",
       "cpu": "AMD Ryzen 7 5800H (16 vCPU)",
       "ram": "14 GiB",
       "role": "Desktop Workstation & AI Development",
-      "ssh_command_example": "sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'"
+      "ssh_command_example": "sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<workstation-ip> '<cmd>'"
     },
     {
-      "name": "compute-node",
-      "hostname": "debian",
-      "tailscale_ip": "100.64.0.20",
+      "name": "<compute-host>",
+      "hostname": "<compute-host>",
+      "tailscale_ip": "100.64.0.11",
       "ssh_user": "root",
       "auth_type": "password",
       "os": "Debian GNU/Linux 13 (trixie)",
       "cpu": "AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)",
       "ram": "62 GiB",
       "role": "Heavy Compute & VM Host (QEMU / Antigravity / AI Services)",
-      "ssh_command_example": "sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'"
+      "ssh_command_example": "sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@<compute-ip> '<cmd>'"
     }
   ],
   "tailscale_topology": [
     {
-      "hostname": "workstation-host",
+      "hostname": "<hostname>",
       "ip": "100.64.0.10",
       "os": "linux",
       "online": true,
       "active": true
     },
     {
-      "hostname": "OPPO Find X7 Ultra",
-      "ip": "100.64.0.6",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.30",
       "os": "android",
       "online": true,
       "active": false
     },
     {
-      "hostname": "Morion",
-      "ip": "100.64.0.11",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.31",
       "os": "android",
       "online": false,
       "active": false
     },
     {
-      "hostname": "debian",
-      "ip": "100.64.0.20",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.11",
       "os": "linux",
       "online": true,
       "active": true
     },
     {
-      "hostname": "debian-I",
-      "ip": "100.64.0.13",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.32",
       "os": "linux",
       "online": false,
       "active": false
     },
     {
-      "hostname": "OPPO Find X7 Ultra",
-      "ip": "100.64.0.8",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.33",
       "os": "android",
       "online": false,
       "active": false
     },
     {
-      "hostname": "tailscale-exit-node",
-      "ip": "100.64.0.9",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.34",
       "os": "linux",
       "online": true,
       "active": false
     },
     {
-      "hostname": "MateBook16",
-      "ip": "100.64.0.4",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.35",
       "os": "windows",
       "online": false,
       "active": false
     },
     {
-      "hostname": "S22 пользователя Lev",
-      "ip": "100.64.0.5",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.36",
       "os": "android",
       "online": false,
       "active": false
     },
     {
-      "hostname": "cs-581403328302-default",
-      "ip": "100.64.0.3",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.37",
       "os": "linux",
       "online": true,
       "active": false
     },
     {
-      "hostname": "OPPO Find X7 Ultra",
-      "ip": "100.64.0.14",
+      "hostname": "<hostname>",
+      "ip": "100.64.0.38",
       "os": "android",
       "online": false,
       "active": false
     },
     {
-      "hostname": "vps-host",
-      "ip": "100.64.0.2",
-      "os": "linux",
-      "online": true,
-      "active": false
-    },
-    {
-      "hostname": "workstation-host",
-      "ip": "100.64.0.7",
-      "os": "linux",
-      "online": false,
-      "active": false
-    },
-    {
-      "hostname": "realme C35",
+      "hostname": "<hostname>",
       "ip": "100.64.0.12",
+      "os": "linux",
+      "online": true,
+      "active": false
+    },
+    {
+      "hostname": "<hostname>",
+      "ip": "100.64.0.39",
+      "os": "linux",
+      "online": false,
+      "active": false
+    },
+    {
+      "hostname": "<hostname>",
+      "ip": "100.64.0.40",
       "os": "android",
       "online": false,
       "active": false
