@@ -63,7 +63,8 @@ async def run_agent():
     logger.info(f"Connecting to Gateway {uri}...")
     while True:
         try:
-            async with websockets.connect(uri, ping_interval=20, ping_timeout=20) as ws:
+            async with websockets.connect(uri, ping_interval=10, ping_timeout=10,
+                                            close_timeout=5) as ws:
                 logger.info(f"Connected to Mesh Gateway as '{USER}'!")
                 async for raw_msg in ws:
                     try:
@@ -81,7 +82,7 @@ async def run_agent():
                         await ws.send(json.dumps(resp, ensure_ascii=False))
         except Exception as e:
             logger.warning(f"Connection lost: {e}. Reconnecting in 5s...")
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
 
 if __name__ == "__main__":
