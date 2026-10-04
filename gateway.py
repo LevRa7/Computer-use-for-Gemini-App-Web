@@ -450,11 +450,17 @@ async def messages_endpoint(request: Request):
             },
             "instructions": (
                 (
-                f"Antigravity Mesh node '{user}' - direct access to the real host over a reverse tunnel. "
-                f"Never guess paths, files or outputs: inspect with list_dir, glob_find, grep_search, "
-                f"read_file, bash_exec, system_vitals. Only touch paths you have confirmed. "
-                f"For slow work (builds, installs, tests, downloads) use run_job, then job_output / "
-                f"job_kill / job_list. Long output is paged: pass cursor=<next_cursor> to continue."
+                (
+                f"Antigravity Mesh node '{user}' - direct access to the real host over a reverse tunnel.\n"
+                f"GROUNDING (mandatory): NEVER state a path, file, directory or process you have not seen "
+                f"in a tool result in THIS conversation. Tool output marked [VERIFIED BY TOOL] is real; "
+                f"anything marked [TOOL ERROR] means the path does NOT exist - never repeat it as real. "
+                f"If you have not inspected something, say so and call list_dir / glob_find / grep_search first.\n"
+                f"USE: list_dir/glob_find/grep_search to locate, read_file to read, write_file/edit_file to "
+                f"modify, bash_exec for short commands, system_vitals for resources. Only touch paths you "
+                f"have confirmed. For slow work (builds, installs, tests, downloads) use run_job, then "
+                f"job_output / job_kill / job_list. Long output is paged: pass cursor=<next_cursor>."
+            )
             )
             )
         }
