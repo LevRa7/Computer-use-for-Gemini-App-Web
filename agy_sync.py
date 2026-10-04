@@ -220,7 +220,7 @@ def collect_server_facts() -> dict:
                 "cpu": "AMD Ryzen 7 5800H (16 vCPU)",
                 "ram": "14 GiB",
                 "role": "Desktop Workstation & AI Development",
-                "ssh_command_example": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'"
+                "ssh_command_example": "sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'"
             },
             {
                 "name": "compute-node",
@@ -232,7 +232,7 @@ def collect_server_facts() -> dict:
                 "cpu": "AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)",
                 "ram": "62 GiB",
                 "role": "Heavy Compute & VM Host (QEMU / Antigravity / AI Services)",
-                "ssh_command_example": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'"
+                "ssh_command_example": "sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'"
             },
             {
                 "name": "vps-host",
@@ -245,7 +245,7 @@ def collect_server_facts() -> dict:
                 "cpu": "1 vCPU",
                 "ram": "2 GiB",
                 "role": "Secondary VPS Node & Exit Node",
-                "ssh_command_example": "sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.30 '<cmd>'"
+                "ssh_command_example": "sshpass -p '$RACKNERD2_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.30 '<cmd>'"
             }
         ],
         "tailscale_topology": tailscale_peers

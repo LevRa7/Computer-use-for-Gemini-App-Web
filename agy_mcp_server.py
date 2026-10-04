@@ -37,14 +37,22 @@ MATEBOOK_IP = "100.64.0.10"
 RACKNERD2_IP = "100.64.0.30"
 PROBE_LOG = BASE_DIR / "mcp_requests.log"
 
+# SSH credentials are read from the environment ONLY -- never hardcode secrets.
+# Set MATEBOOK_PASS / DEBIAN_PASS / RACKNERD2_PASS in the service environment.
+MATEBOOK_PASS = os.environ.get("MATEBOOK_PASS", "")
+DEBIAN_PASS = os.environ.get("DEBIAN_PASS", "")
+RACKNERD2_PASS = os.environ.get("RACKNERD2_PASS", "")
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("agy_mcp")
 
 # Tool functions
 def racknerd2_exec(command: str) -> str:
+    if not RACKNERD2_PASS:
+        return "[RackNerd-5a24bf9 | Error]: RACKNERD2_PASS environment variable is not set (hardcoded credentials removed)."
     t0 = time.time()
     ssh_cmd = [
-        "sshpass", "-p", "<REDACTED>", "ssh",
+        "sshpass", "-p", RACKNERD2_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
         f"root@{RACKNERD2_IP}", command
     ]
@@ -87,9 +95,11 @@ def bash_exec(command: str) -> str:
         return f"[Execution Error]: {e}"
 
 def debian_exec(command: str) -> str:
+    if not DEBIAN_PASS:
+        return "[Debian Node 100.64.0.20 | Error]: DEBIAN_PASS environment variable is not set (hardcoded credentials removed)."
     t0 = time.time()
     ssh_cmd = [
-        "sshpass", "-p", "<REDACTED>", "ssh",
+        "sshpass", "-p", DEBIAN_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
         f"root@{DEBIAN_IP}", command
     ]
@@ -113,9 +123,11 @@ def debian_exec(command: str) -> str:
         return f"[Debian Node 100.64.0.20 | Error]: {e}"
 
 def matebook_exec(command: str) -> str:
+    if not MATEBOOK_PASS:
+        return "[workstation | Error]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
     t0 = time.time()
     ssh_cmd = [
-        "sshpass", "-p", "<REDACTED>", "ssh",
+        "sshpass", "-p", MATEBOOK_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
         f"lev@{MATEBOOK_IP}", command
     ]
@@ -144,8 +156,10 @@ def system_vitals() -> str:
     return vitals.model_dump_json(indent=2)
 
 def matebook_vitals() -> str:
+    if not MATEBOOK_PASS:
+        return "[workstation]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
     ssh_cmd = [
-        "sshpass", "-p", "<REDACTED>", "ssh",
+        "sshpass", "-p", MATEBOOK_PASS, "ssh",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=8",
         f"lev@{MATEBOOK_IP}",
         "uptime; free -h | grep Mem; cat /sys/class/power_supply/BAT*/capacity 2>/dev/null; cat /sys/class/power_supply/BAT*/status 2>/dev/null"
@@ -239,6 +253,8 @@ def gdrive_copy(file_name_or_id: str, dest_path: str, target_node: str = "vps") 
             duration = round(time.time() - t0, 2)
             return f"[Exit code: 0 in {duration}s]\nSuccessfully copied '{actual_file_name}' ({file_size} bytes) from Google Drive to VPS: {final_dest}"
         elif target_node in ("matebook", "matebook16"):
+            if not MATEBOOK_PASS:
+                return "[Google Drive | Error]: MATEBOOK_PASS environment variable is not set (hardcoded credentials removed)."
             dest_clean = dest_path.strip()
             if dest_clean.startswith("~/"):
                 dest_clean = "~/" + dest_clean[2:]
@@ -247,12 +263,12 @@ def gdrive_copy(file_name_or_id: str, dest_path: str, target_node: str = "vps") 
             parent_dir = str(Path(dest_clean).parent)
             if parent_dir and parent_dir != ".":
                 subprocess.run([
-                    "sshpass", "-p", "<REDACTED>", "ssh",
+                    "sshpass", "-p", MATEBOOK_PASS, "ssh",
                     "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
                     f"lev@{MATEBOOK_IP}", f"mkdir -p '{parent_dir}'"
                 ], capture_output=True, timeout=15)
             scp_cmd = [
-                "sshpass", "-p", "<REDACTED>", "scp",
+                "sshpass", "-p", MATEBOOK_PASS, "scp",
                 "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
                 str(tmp_target), f"lev@{MATEBOOK_IP}:{dest_clean}"
             ]
@@ -264,6 +280,8 @@ def gdrive_copy(file_name_or_id: str, dest_path: str, target_node: str = "vps") 
                 err_clean = "\n".join(l for l in proc.stderr.splitlines() if "Permanently added" not in l).strip()
                 return f"[workstation | Exit: {proc.returncode} in {duration}s]\n[STDERR]\n{err_clean}"
         elif target_node in ("debian", "ryzen", "5950x"):
+            if not DEBIAN_PASS:
+                return "[Google Drive | Error]: DEBIAN_PASS environment variable is not set (hardcoded credentials removed)."
             dest_clean = dest_path.strip()
             if dest_clean.startswith("~/"):
                 dest_clean = "/root/" + dest_clean[2:]
@@ -272,12 +290,12 @@ def gdrive_copy(file_name_or_id: str, dest_path: str, target_node: str = "vps") 
             parent_dir = str(Path(dest_clean).parent)
             if parent_dir and parent_dir != ".":
                 subprocess.run([
-                    "sshpass", "-p", "<REDACTED>", "ssh",
+                    "sshpass", "-p", DEBIAN_PASS, "ssh",
                     "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
                     f"root@{DEBIAN_IP}", f"mkdir -p '{parent_dir}'"
                 ], capture_output=True, timeout=15)
             scp_cmd = [
-                "sshpass", "-p", "<REDACTED>", "scp",
+                "sshpass", "-p", DEBIAN_PASS, "scp",
                 "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
                 str(tmp_target), f"root@{DEBIAN_IP}:{dest_clean}"
             ]

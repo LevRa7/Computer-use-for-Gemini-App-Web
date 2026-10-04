@@ -41,7 +41,7 @@
 - **ОС:** `Debian GNU/Linux 13 (trixie)` | **CPU:** `AMD Ryzen 7 5800H (16 vCPU)` | **RAM:** `14 GiB`
 - **Назначение:** Desktop Workstation & AI Development
 - **Нативный вызов через MCP:** `matebook_exec('<команда>')`
-- **Команда SSH на VPS хосте:** `sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
+- **Команда SSH на VPS хосте:** `sshpass -p '$MATEBOOK_PASS' ssh -o StrictHostKeyChecking=no <ssh-user>@<host-ip> '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
 
 ### 💻 compute-node (`debian`)
 - **Tailscale IP:** `100.64.0.20`
@@ -49,7 +49,7 @@
 - **ОС:** `Debian GNU/Linux 13 (trixie)` | **CPU:** `AMD Ryzen 9 5950X 16-Core Processor (32 vCPU)` | **RAM:** `62 GiB`
 - **Назначение:** Heavy Compute & VM Host (QEMU / Antigravity / AI Services)
 - **Нативный вызов через MCP:** `debian_exec('<команда>')`
-- **Команда SSH на VPS хосте:** `sshpass -p '<REDACTED>' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
+- **Команда SSH на VPS хосте:** `sshpass -p '$DEBIAN_PASS' ssh -o StrictHostKeyChecking=no root@100.64.0.20 '<cmd>'` *(Примечание: прямой SSH из Gemini невозможен!)*
 
 ---
 
