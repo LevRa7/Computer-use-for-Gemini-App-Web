@@ -798,7 +798,9 @@ def _tool_glob_find(args: Dict[str, Any]) -> Dict[str, Any]:
                     if fnmatch.fnmatch(name, pattern):
                         found.append(os.path.join(root, name))
 
-        files = sorted(os.path.realpath(p) for p in found)
+        # Deduplicate: glob.glob itself returns duplicates for patterns such as
+        # "**/**/*.py", which would otherwise be reported several times.
+        files = sorted({os.path.realpath(p) for p in found})
         truncated = len(files) > GLOB_MAX_RESULTS
         if truncated:
             files = files[:GLOB_MAX_RESULTS]
@@ -1133,6 +1135,7 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "job_id": job_id,
             "pid": proc.pid,
+            "pid_start": meta.get("pid_start"),
             "command": command,
             "started_at": started_at,
         }
