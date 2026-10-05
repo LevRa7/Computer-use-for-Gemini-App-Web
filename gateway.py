@@ -443,7 +443,18 @@ async def messages_endpoint(request: Request):
         )
 
     client_ip = request.client.host if request.client else "unknown"
-    logger.info(f"Incoming MCP RPC from {client_ip} [{user}]: method={method}, id={req_id}")
+    tool_note = ""
+    if method == "tools/call":
+        # Log which tool the client asked for: without it a retry loop in the
+        # client is impossible to diagnose from the gateway side.
+        try:
+            tool_note = ", tool=%s, args=%s" % (
+                params.get("name"),
+                json.dumps(params.get("arguments", {}), ensure_ascii=False)[:120],
+            )
+        except Exception:
+            tool_note = ", tool=?"
+    logger.info(f"Incoming MCP RPC from {client_ip} [{user}]: method={method}, id={req_id}{tool_note}")
 
     resp = {"jsonrpc": "2.0", "id": req_id}
 
@@ -1001,6 +1012,20 @@ async def mcp_unified_endpoint(request: Request):
                         "mcp-protocol-version": "2024-11-05",
                     }
                 )
+            accept = (request.headers.get("accept") or "").lower()
+            client_ip = request.client.host if request.client else "unknown"
+            logger.info(
+                f"GET /messages from {client_ip} [{user}] accept={accept[:60]!r} "
+                f"-> {'sse-stream' if 'text/event-stream' in accept else 'json-ready'}"
+            )
+            # Some MCP clients (Gemini Spark among them) open the message endpoint
+            # itself as the server->client stream instead of /sse. Answering that
+            # with a small JSON body closes the stream immediately, which makes the
+            # client drop the session and re-initialise in a loop. Serve a real SSE
+            # stream when the caller asks for one, and keep the JSON readiness probe
+            # for plain health checks.
+            if "text/event-stream" in accept:
+                return await sse_endpoint(request)
             return JSONResponse({
                 "status": "ready",
                 "endpoint": "messages",
