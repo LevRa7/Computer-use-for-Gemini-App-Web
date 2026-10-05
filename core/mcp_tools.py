@@ -443,6 +443,81 @@ def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
+    """A one-call summary of the host.
+
+    Exploratory agents spend several tool calls discovering the same basics (OS,
+    desktop, home, disks). Gemini's client allows only a handful of calls per
+    turn, so this answers them in one round trip.
+    """
+    import platform
+    import socket as _socket
+    import subprocess as _sp
+
+    def run(cmd: str) -> str:
+        try:
+            out = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
+            return (out.stdout or out.stderr).strip()
+        except Exception:
+            return ""
+
+    info: Dict[str, Any] = {
+        "hostname": _socket.gethostname(),
+        "os": platform.platform(),
+        "kernel": platform.release(),
+        "python": platform.python_version(),
+        "user": os.environ.get("USER") or os.environ.get("USERNAME") or "",
+        "home": os.path.expanduser("~"),
+        "cwd": os.getcwd(),
+        "desktop": os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or "",
+        "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
+        "shell": os.environ.get("SHELL", ""),
+        "disks": run("df -h --output=target,size,used,avail,pcent 2>/dev/null | head -8"),
+        "memory": run("free -h 2>/dev/null | head -3"),
+        "load": run("uptime"),
+        "top_processes": run("ps -eo comm,%mem --sort=-%mem 2>/dev/null | head -6"),
+    }
+    # Current wallpaper, the usual first question for a desktop node.
+    # Current wallpaper. KDE keeps the last applied value in the appletsrc as
+    # `Image=<path-or-dir>` (sometimes with a file:// prefix); GNOME uses
+    # gsettings. A directory means a wallpaper package, so resolve the image
+    # inside it the same way Plasma does.
+    wallpaper = ""
+    kde_cfg = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
+    if os.path.isfile(kde_cfg):
+        try:
+            with open(kde_cfg, "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("Image="):
+                        wallpaper = line.strip()[len("Image="):]
+        except Exception:
+            wallpaper = ""
+    wallpaper = wallpaper.replace("file://", "")
+    if not wallpaper:
+        gnome = run("gsettings get org.gnome.desktop.background picture-uri 2>/dev/null")
+        if gnome and "file://" in gnome:
+            wallpaper = gnome.split("file://", 1)[1].strip().strip("'\"")
+    if wallpaper:
+        if os.path.isdir(wallpaper):
+            # A wallpaper package holds many resolutions and formats (png, jpg,
+            # webp, avif); pick the largest image inside it.
+            best, best_size = "", 0
+            for root, _dirs, files in os.walk(wallpaper):
+                for name in files:
+                    if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".avif")):
+                        path = os.path.join(root, name)
+                        try:
+                            size = os.path.getsize(path)
+                        except OSError:
+                            continue
+                        if size > best_size:
+                            best, best_size = path, size
+            wallpaper = best or wallpaper
+        info["wallpaper"] = wallpaper
+        info["wallpaper_exists"] = os.path.isfile(wallpaper)
+    return info
+
+
 def _tool_system_vitals(args: Dict[str, Any]) -> Any:
     try:
         if _core_get_host_vitals is not None:
@@ -1359,6 +1434,13 @@ TOOLS: List[Dict[str, Any]] = [
         "inputSchema": _schema({}),
     },
     {
+        "name": "system_info",
+        "title": "System Info",
+        "description": ("One-call host summary: OS, desktop, user, home, disks, memory, load, "
+                        "top processes and the current wallpaper."),
+        "inputSchema": _schema({}),
+    },
+    {
         "name": "system_vitals",
         "title": "System Vitals",
         "description": "Retrieve CPU, RAM and disk metrics of the local host.",
@@ -1527,6 +1609,7 @@ TOOLS: List[Dict[str, Any]] = [
 
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "mesh_status": _tool_mesh_status,
+    "system_info": _tool_system_info,
     "system_vitals": _tool_system_vitals,
     "get_orchestration_skill": _tool_get_orchestration_skill,
     "list_dir": _tool_list_dir,

@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import socket
+import time
 import uuid
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -223,7 +224,11 @@ async def health(request: Request):
         "host": "smart-server.online",
         "target_user": user,
         "node_online": is_online,
-        "active_tunnels_count": len(active_tunnels)
+        "active_tunnels_count": len(active_tunnels),
+        # Diagnostics: an abandoned SSE stream keeps a queue alive, and a client
+        # with a connection cap would then be unable to open a new one.
+        "open_sse_streams": sum(len(q) for q in active_sse_subscribers.values()),
+        "streams_per_user": {u: len(q) for u, q in active_sse_subscribers.items()},
     }, headers={"Access-Control-Allow-Origin": "*"})
 
 async def api_register(request: Request):
@@ -436,11 +441,14 @@ async def sse_endpoint(request: Request):
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:
-            pass
+            logger.info(f"SSE stream cancelled for '{user}' (stream_key={stream_key})")
+            raise
         finally:
             active_sse_sessions.pop(stream_key, None)
             if user in active_sse_subscribers and queue in active_sse_subscribers[user]:
                 active_sse_subscribers[user].remove(queue)
+            logger.info(f"SSE stream closed for '{user}' (stream_key={stream_key}, "
+                        f"open_now={len(active_sse_subscribers.get(user, ()))})")
 
     return StreamingResponse(
         event_generator(),
@@ -491,6 +499,7 @@ async def messages_endpoint(request: Request):
         )
 
     client_ip = request.client.host if request.client else "unknown"
+    call_started = time.monotonic()
     tool_note = ""
     if method == "tools/call":
         # Log which tool the client asked for: without it a retry loop in the
@@ -603,6 +612,13 @@ async def messages_endpoint(request: Request):
                     "name": "mesh_status",
                     "description": ("Confirm this node is reachable. Call this FIRST if you believe the "
                                     "host is offline: it returns live evidence from the host."),
+                    "inputSchema": {"type": "object", "properties": {}, "required": []}
+                },
+                {
+                    "name": "system_info",
+                    "description": ("One-call host summary: OS, desktop, user, home, disks, memory, load, "
+                                    "top processes and the current wallpaper. Prefer this over several "
+                                    "exploratory commands - the client allows only a few calls per turn."),
                     "inputSchema": {"type": "object", "properties": {}, "required": []}
                 },
                 {
@@ -749,6 +765,23 @@ async def messages_endpoint(request: Request):
                     if res.get(key) is not None:
                         parts.append(f"{key}: {res.get(key)}")
                 content_text = "\n".join(parts)
+        elif name == "system_info":
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                parts = []
+                for key in ("hostname", "os", "kernel", "user", "home", "desktop",
+                            "session_type", "wallpaper", "wallpaper_exists"):
+                    value = res.get(key)
+                    if value not in (None, ""):
+                        parts.append("%s: %s" % (key, value))
+                for key in ("memory", "load", "disks", "top_processes"):
+                    if res.get(key):
+                        parts.append("\n[%s]\n%s" % (key, res.get(key)))
+                content_text = "\n".join(parts) if parts else json.dumps(res, ensure_ascii=False, indent=2)
         elif name == "system_vitals":
             res = await call_remote_tool(user, name, args)
             if "error" in res:
@@ -988,6 +1021,11 @@ async def messages_endpoint(request: Request):
     # and it takes the result from the stream - removing this broadcast made the
     # command run on the host while the model never received the answer.
     broadcast_sse(user, resp)
+
+    if method == "tools/call":
+        # Duration matters: Gemini's frontend gives a tool call roughly 30 s, so a
+        # slow command shows up here before it shows up as a client-side timeout.
+        logger.info(f"tools/call {params.get('name')} took {time.monotonic() - call_started:.2f}s")
 
     # Return response in HTTP body (for Streamable HTTP clients) with Mcp-Session-Id header
     session_id = request.headers.get("mcp-session-id") or user
