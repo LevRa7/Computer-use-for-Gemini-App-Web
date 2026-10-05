@@ -80,6 +80,17 @@ def test_skill_advertises_the_shared_domain_only():
     assert f"Target Node: node-one (shared gateway {gateway.PUBLIC_HOST})" in skill
 
 
+def test_post_responses_are_not_duplicated_on_the_stream():
+    """Body + stream with the same response id makes a strict client drop the session.
+
+    The streamable-HTTP endpoints answer in the POST body; only the legacy
+    transports deliver on the stream.
+    """
+    assert gateway.should_broadcast_response("/sse") is False
+    assert gateway.should_broadcast_response("/mcp") is False
+    assert gateway.should_broadcast_response("/messages") is True
+
+
 def test_registration_response_has_no_subdomain(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway, "REGISTRY_PATH", str(tmp_path / "registry.json"))
     payload = json.dumps({"username": "fresh-node", "mac_address": "", "os": "linux"}).encode()
