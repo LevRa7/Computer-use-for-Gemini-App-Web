@@ -13,7 +13,10 @@ Configuration (read once at import/startup)::
     MESH_CONFIG_FILE  KEY=VALUE file used for any of the three above that is not
                       set in the environment (default:
                       ~/.config/antigravity-mesh/agent.env).  This keeps the token
-                      out of launchers such as the Windows Startup script.
+                      out of launchers such as the Windows Startup script.  Any
+                      other MESH_* key in that file is exported as well.
+    MESH_SHELL        Windows command shell: "cmd" or "git-bash" (default:
+                      PowerShell, falling back to cmd.exe when PowerShell is absent)
     MESH_WORKSPACE    base directory for relative paths (default: cwd)
     MESH_READ_ONLY    "1"/"true" -> mutating tools refuse to run
     MESH_WRITE_ROOTS  pathsep-separated list of roots allowed for writes
@@ -76,6 +79,15 @@ def _load_settings() -> dict:
 
     def pick(key: str, default: str) -> str:
         return os.environ.get(key) or file_values.get(key) or default
+
+    # Every other MESH_* key the operator put in the same file is exported too, so
+    # one agent.env (or one Windows Startup launcher) configures the whole node:
+    # MESH_SHELL for the Windows command shell, MESH_WORKSPACE, MESH_READ_ONLY,
+    # MESH_WRITE_ROOTS, MESH_JOBS_DIR, MESH_MAX_OUTPUT_CHARS. The real environment
+    # always wins over the file.
+    for key, value in file_values.items():
+        if key.startswith("MESH_") and not os.environ.get(key):
+            os.environ[key] = value
 
     return {
         "gateway": pick("MESH_GATEWAY", "smart-server.online"),
