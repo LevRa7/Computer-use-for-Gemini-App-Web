@@ -126,6 +126,41 @@ Automatically transfers files and configures the node on your remote server via 
 
 ---
 
+## 🚢 Gateway Operations
+
+The gateway is a single host serving every node. Publish it only through the
+deploy script, so the running gateway, the served installers and the node
+bootstrap payload cannot drift apart:
+
+```bash
+MESH_GATEWAY_SSH=root@<gateway-ip> ./deploy_gateway.sh              # deploy
+MESH_GATEWAY_SSH=root@<gateway-ip> ./deploy_gateway.sh --dry-run    # preview
+MESH_GATEWAY_SSH=root@<gateway-ip> MESH_GATEWAY_SSH_PASS_FILE=~/.ssh/gw-pass \
+    ./deploy_gateway.sh                                            # password auth
+```
+It verifies every upload with an sha256 manifest on the host, takes a
+timestamped backup, installs with the right owner, restarts the service and
+finishes with a public health check. Nothing is installed if verification fails.
+
+### TLS certificate policy (one name, no per-device SANs)
+
+The certificate must cover the **shared domain only**. No device name is ever
+added to it, because a node is selected by `?user=` and never by a hostname:
+
+```bash
+# what the certificate currently covers
+sudo certbot certificates | grep -A1 'Certificate Name: smart-server.online'
+
+# canonical renewal check (staging, does not touch the live certificate)
+sudo certbot renew --dry-run --cert-name smart-server.online
+```
+Legacy per-device SANs may still be present from before this contract. They are
+harmless and keep old bookmarked URLs working; drop them from the lineage at the
+next renewal once no client uses subdomain URLs any more (see the `domains =`
+line in `/etc/letsencrypt/renewal/<name>.conf`, or re-issue with a single `-d`).
+
+---
+
 ## 🔒 Security Architecture
 
 - **Token-Gated Endpoints**: Every incoming request must contain the cryptographic token via `?token=...` or `Authorization: Bearer`.
@@ -237,6 +272,33 @@ SAN в TLS-сертификате. Если имени нет в сертифи�
   (на стороне шлюза).
 - Старые ссылки с субдоменами устройства продолжают работать для совместимости
   и пишут предупреждение в лог; `MESH_LEGACY_SUBDOMAIN=0` на шлюзе отключает их.
+
+---
+
+## 🚢 Эксплуатация шлюза
+
+Шлюз — один хост на все узлы. Публикуйте его только скриптом, чтобы работающий
+шлюз, отдаваемые установщики и bootstrap-код узлов не расходились:
+
+```bash
+MESH_GATEWAY_SSH=root@<ip-шлюза> ./deploy_gateway.sh            # задеплоить
+MESH_GATEWAY_SSH=root@<ip-шлюза> ./deploy_gateway.sh --dry-run  # предпросмотр
+```
+Скрипт проверяет каждую загрузку манифестом sha256 на хосте, делает бэкап с
+меткой времени, ставит файлы с нужным владельцем, перезапускает службу и
+завершает публичной проверкой здоровья. При несовпадении хэшей ничего не
+устанавливается.
+
+**Политика TLS-сертификата: только общий домен, без SAN на устройства.**
+Имена узлов в сертификат не добавляются никогда — узел выбирается `?user=`:
+
+```bash
+sudo certbot certificates | grep -A1 'Certificate Name: smart-server.online'
+sudo certbot renew --dry-run --cert-name smart-server.online   # проверка продления
+```
+Старые SAN'ы устройств могут остаться с прежнего контракта: они безвредны и
+поддерживают совместимость старых ссылок. Убрать их можно при следующем
+продлении, когда субдоменными ссылками никто не пользуется.
 
 ---
 
