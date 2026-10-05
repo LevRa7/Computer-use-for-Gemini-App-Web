@@ -521,8 +521,17 @@ async def messages_endpoint(request: Request):
     resp = {"jsonrpc": "2.0", "id": req_id}
 
     if method == "initialize":
+        # Protocol version negotiation. The spec says a client MUST disconnect
+        # when the server answers with a version it does not support, and we used
+        # to hard-code 2024-11-05 whatever the client asked for. Echo the client's
+        # version when we support it, otherwise fall back to our baseline.
+        client_version = str((params or {}).get("protocolVersion") or "")
+        supported = ("2025-06-18", "2025-03-26", "2024-11-05")
+        negotiated = client_version if client_version in supported else "2024-11-05"
+        logger.info(f"initialize: client requested protocolVersion={client_version!r} "
+                    f"clientInfo={(params or {}).get('clientInfo')} -> answering {negotiated}")
         resp["result"] = {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": negotiated,
             "capabilities": {
                 "tools": {"listChanged": False},
                 "prompts": {"listChanged": False},
