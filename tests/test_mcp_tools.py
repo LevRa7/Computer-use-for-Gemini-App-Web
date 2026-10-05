@@ -41,6 +41,7 @@ def test_tools_surface_contains_all_tools():
     names = [t["name"] for t in mcp_tools.TOOLS]
     assert names == [
         "mesh_status",
+        "system_info",
         "system_vitals",
         "get_orchestration_skill",
         "list_dir",
