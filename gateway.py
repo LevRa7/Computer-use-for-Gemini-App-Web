@@ -407,16 +407,22 @@ async def sse_endpoint(request: Request):
         )
 
     token = get_request_token(request)
-    # The session id MUST match the one returned by POST responses. Generating a
-    # random UUID here while messages_endpoint answers with the user name made a
-    # client see two different sessions for one connection: it aborted the
-    # session (DELETE) and re-initialised in a loop.
+    # Two different things are needed here, and conflating them broke delivery:
+    #   * the id the CLIENT sees must match the one POST responses return, or the
+    #     client believes it holds two sessions and aborts one;
+    #   * the key this queue is stored under must be UNIQUE per connection,
+    #     because Google's frontends load-balance requests across many IPs and
+    #     any one of them may send DELETE. With a shared key that DELETE destroyed
+    #     the stream another in-flight request was still reading, so its result
+    #     never reached the model.
     session_id = request.headers.get("mcp-session-id") or user
+    stream_key = str(uuid.uuid4())
     queue = asyncio.Queue()
     if user not in active_sse_subscribers:
         active_sse_subscribers[user] = set()
     active_sse_subscribers[user].add(queue)
-    active_sse_sessions[session_id] = queue
+    # stored under the per-connection key, not the shared client-visible id
+    active_sse_sessions[stream_key] = queue
 
     async def event_generator():
         try:
@@ -432,7 +438,7 @@ async def sse_endpoint(request: Request):
         except asyncio.CancelledError:
             pass
         finally:
-            active_sse_sessions.pop(session_id, None)
+            active_sse_sessions.pop(stream_key, None)
             if user in active_sse_subscribers and queue in active_sse_subscribers[user]:
                 active_sse_subscribers[user].remove(queue)
 
