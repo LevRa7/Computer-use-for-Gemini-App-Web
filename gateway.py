@@ -526,8 +526,18 @@ async def messages_endpoint(request: Request):
         # to hard-code 2024-11-05 whatever the client asked for. Echo the client's
         # version when we support it, otherwise fall back to our baseline.
         client_version = str((params or {}).get("protocolVersion") or "")
-        supported = ("2025-06-18", "2025-03-26", "2024-11-05")
-        negotiated = client_version if client_version in supported else "2024-11-05"
+        supported = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+        if client_version in supported:
+            negotiated = client_version
+        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", client_version):
+            # The tool surface (initialize / tools list+call / ping) is stable
+            # across revisions. Answering an older version than the client asked
+            # for makes a compliant client DISCONNECT immediately - that was the
+            # real cause of the session churn - so echo any dated version rather
+            # than lose the session.
+            negotiated = client_version
+        else:
+            negotiated = "2024-11-05"
         logger.info(f"initialize: client requested protocolVersion={client_version!r} "
                     f"clientInfo={(params or {}).get('clientInfo')} -> answering {negotiated}")
         resp["result"] = {
