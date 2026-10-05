@@ -1397,18 +1397,30 @@ def _tool_job_list(args: Dict[str, Any]) -> Dict[str, Any]:
             refreshed = _refresh_meta(meta.get("job_id", ""), meta) or meta
             metas.append(refreshed)
         metas.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
-        jobs = [
-            {
+        # The full history is unbounded (one entry per job ever started), and every
+        # byte here lands in the model's context. Show the most recent few by
+        # default and let the caller ask for more explicitly.
+        try:
+            limit = int(args.get("limit") or 20)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 50))
+        jobs = []
+        for meta in metas[:limit]:
+            command = str(meta.get("command") or "")
+            if len(command) > 80:
+                command = command[:77] + "..."
+            jobs.append({
                 "job_id": meta.get("job_id"),
-                "command": meta.get("command"),
+                "command": command,
                 "status": meta.get("status", "running"),
                 "exit_code": meta.get("exit_code"),
                 "duration": meta.get("duration"),
                 "started_at": meta.get("started_at"),
-            }
-            for meta in metas[:50]
-        ]
-        return {"jobs": jobs, "count": len(jobs)}
+            })
+        return {"jobs": jobs, "count": len(jobs), "total": len(metas),
+                "note": ("showing the %d most recent of %d; pass limit=<n> for more"
+                         % (len(jobs), len(metas))) if len(metas) > len(jobs) else None}
     except Exception as exc:
         return {"error": "job_list failed: %s" % exc}
 
@@ -1597,8 +1609,10 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "job_list",
         "title": "Job List",
-        "description": "List recent background jobs, newest first (max 50).",
-        "inputSchema": _schema({}),
+        "description": "List recent background jobs, newest first (20 by default, max 50).",
+        "inputSchema": _schema({
+            "limit": {"type": "integer", "description": "How many jobs to return (1-50, default 20)."},
+        }),
     },
 ]
 
