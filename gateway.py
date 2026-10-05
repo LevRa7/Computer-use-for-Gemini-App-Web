@@ -968,7 +968,14 @@ async def messages_endpoint(request: Request):
                 stderr = res.get("stderr", "")
                 if exit_code != 0:
                     is_error = True
-                    parts = [f"[Exit code: {exit_code}]"]
+                    # A non-zero exit code is the command's own result, not a
+                    # transport failure: the command RAN on the host. Without this
+                    # wording a model reads isError=true as "the node is
+                    # unreachable" and stops looking for the real output.
+                    parts = [
+                        f"[Exit code: {exit_code}] The command ran on the host and the node "
+                        f"is reachable; {exit_code} is the command's own exit status."
+                    ]
                     if stderr.strip():
                         parts.append(stderr)
                     if stdout.strip():
