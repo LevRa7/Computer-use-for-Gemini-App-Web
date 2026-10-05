@@ -500,6 +500,10 @@ async def messages_endpoint(request: Request):
 
     client_ip = request.client.host if request.client else "unknown"
     call_started = time.monotonic()
+    # What the client accepts decides how the answer must be framed: a strict
+    # streamable-HTTP client that asks only for text/event-stream rejects a plain
+    # application/json body even when the payload is correct.
+    accept_hdr = (request.headers.get("accept") or "").lower()
     tool_note = ""
     if method == "tools/call":
         # Log which tool the client asked for: without it a retry loop in the
@@ -511,7 +515,8 @@ async def messages_endpoint(request: Request):
             )
         except Exception:
             tool_note = ", tool=?"
-    logger.info(f"Incoming MCP RPC from {client_ip} [{user}]: method={method}, id={req_id}{tool_note}")
+    logger.info(f"Incoming MCP RPC from {client_ip} [{user}]: method={method}, id={req_id}{tool_note}"
+                + (f", accept={accept_hdr[:60]!r}" if accept_hdr else ""))
 
     resp = {"jsonrpc": "2.0", "id": req_id}
 
@@ -1027,17 +1032,23 @@ async def messages_endpoint(request: Request):
         # slow command shows up here before it shows up as a client-side timeout.
         logger.info(f"tools/call {params.get('name')} took {time.monotonic() - call_started:.2f}s")
 
-    # Return response in HTTP body (for Streamable HTTP clients) with Mcp-Session-Id header
+    # Return response in HTTP body (for Streamable HTTP clients) with Mcp-Session-Id header.
+    # A client that asks ONLY for text/event-stream must get an SSE-framed body:
+    # a strict streamable-HTTP client rejects application/json even when the
+    # payload itself is correct.
     session_id = request.headers.get("mcp-session-id") or user
-    return JSONResponse(
-        resp,
-        headers={
-            "mcp-session-id": session_id,
-            "mcp-protocol-version": "2024-11-05",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version"
-        }
-    )
+    headers = {
+        "mcp-session-id": session_id,
+        "mcp-protocol-version": "2024-11-05",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
+    }
+    wants_sse_only = ("text/event-stream" in accept_hdr) and ("application/json" not in accept_hdr)
+    if wants_sse_only:
+        payload = "event: message\ndata: %s\n\n" % json.dumps(resp, ensure_ascii=False)
+        headers["Cache-Control"] = "no-cache"
+        return Response(payload, media_type="text/event-stream", headers=headers)
+    return JSONResponse(resp, headers=headers)
 
 async def mcp_unified_endpoint(request: Request):
     if request.method == "OPTIONS":
