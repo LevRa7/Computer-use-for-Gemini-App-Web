@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 
 import websockets
 
@@ -59,13 +60,22 @@ async def handle_tool_call(name: str, args: dict) -> dict:
 
 
 async def run_agent():
+    """Stay connected to the gateway, healing every kind of link failure.
+
+    A dropped websocket is retried with exponential backoff plus jitter: a short
+    first retry restores a flapping link quickly, while the growing cap stops a
+    hammering loop when the network is genuinely down. The backoff resets after a
+    healthy connection, so a long-lived session is not penalised.
+    """
     uri = f"wss://{GATEWAY_HOST}/ws/tunnel?user={USER}&token={TOKEN}"
     logger.info(f"Connecting to Gateway {uri}...")
+    backoff = 1.0
     while True:
         try:
             async with websockets.connect(uri, ping_interval=10, ping_timeout=10,
                                             close_timeout=5) as ws:
                 logger.info(f"Connected to Mesh Gateway as '{USER}'!")
+                backoff = 1.0                      # healthy again
                 async for raw_msg in ws:
                     try:
                         data = json.loads(raw_msg)
@@ -77,12 +87,19 @@ async def run_agent():
                     if method == "tools/call":
                         tool_name = params.get("name")
                         tool_args = params.get("arguments", {})
-                        res = await handle_tool_call(tool_name, tool_args)
+                        try:
+                            res = await handle_tool_call(tool_name, tool_args)
+                        except Exception as tool_exc:
+                            # A tool must never take the tunnel down with it.
+                            logger.warning(f"Tool {tool_name} failed: {tool_exc}")
+                            res = {"error": f"{type(tool_exc).__name__}: {tool_exc}"}
                         resp = {"id": req_id, "result": res}
                         await ws.send(json.dumps(resp, ensure_ascii=False))
         except Exception as e:
-            logger.warning(f"Connection lost: {e}. Reconnecting in 5s...")
-            await asyncio.sleep(2)
+            delay = min(backoff, 15.0) + random.uniform(0, 0.5)
+            logger.warning(f"Connection lost: {e}. Reconnecting in {delay:.1f}s...")
+            await asyncio.sleep(delay)
+            backoff = min(backoff * 2, 15.0)
 
 
 if __name__ == "__main__":
