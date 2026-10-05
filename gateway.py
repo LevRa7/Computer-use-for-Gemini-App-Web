@@ -29,6 +29,7 @@ active_tunnels = {}  # user -> {"ws": WebSocket, "pending": {req_id: Future}}
 active_sse_subscribers = {}  # user -> set of asyncio.Queue
 active_sse_sessions = {}  # session_id -> asyncio.Queue
 active_sessions = {}  # session_id -> user, issued once per initialize
+latest_session_by_user = {}  # user -> most recently issued session id
 
 # Negotiated protocol version per user. The value must be identical in the
 # initialize result AND in the mcp-protocol-version header of every response: a
@@ -92,7 +93,34 @@ def issue_session_id(user: str) -> str:
     """
     session_id = uuid.uuid4().hex
     active_sessions[session_id] = user
+    latest_session_by_user[user] = session_id
     return session_id
+
+
+def announce_endpoint_for_path(path: str) -> bool:
+    """Whether a GET stream on this path may emit the classic ``event: endpoint``.
+
+    The classic SSE transport announces the POST target (/messages). Streamable
+    HTTP (GET /mcp) must carry JSON-RPC frames only, so the frame is suppressed
+    there - a strict client otherwise drops the stream it reads results from.
+    """
+    return path != "/mcp"
+
+
+def resolve_session_id(request: Request, user: str) -> str:
+    """The session id this connection must see.
+
+    Prefer the id the client sends back. Otherwise use the session this user most
+    recently opened: a client that holds a session but omits the header must not
+    be told a different id, or it believes it holds two sessions and aborts one
+    (that mismatch was the cause of the original initialize/DELETE churn). The
+    bare user name stays as the last resort for header-less legacy clients.
+    """
+    return (
+        request.headers.get("mcp-session-id")
+        or latest_session_by_user.get(user)
+        or user
+    )
 
 
 def protocol_version_for(user: str) -> str:
@@ -506,8 +534,13 @@ async def sse_endpoint(request: Request):
     #     any one of them may send DELETE. With a shared key that DELETE destroyed
     #     the stream another in-flight request was still reading, so its result
     #     never reached the model.
-    session_id = request.headers.get("mcp-session-id") or user
+    session_id = resolve_session_id(request, user)
     stream_key = str(uuid.uuid4())
+    # The classic SSE transport announces where to POST. A Streamable HTTP client
+    # (GET /mcp) must receive JSON-RPC frames only: an `endpoint` frame pointing
+    # at a different path is not part of that protocol, and a strict client drops
+    # the stream over it - the stream it was reading tool results from.
+    announce_endpoint = announce_endpoint_for_path(request.url.path)
     queue = asyncio.Queue()
     if user not in active_sse_subscribers:
         active_sse_subscribers[user] = set()
@@ -517,7 +550,8 @@ async def sse_endpoint(request: Request):
 
     async def event_generator():
         try:
-            yield f"event: endpoint\ndata: /messages?user={user}&token={token}\n\n"
+            if announce_endpoint:
+                yield f"event: endpoint\ndata: /messages?user={user}&token={token}\n\n"
             while True:
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=15.0)
@@ -573,7 +607,7 @@ async def messages_endpoint(request: Request):
     req_id = body.get("id")
 
     if req_id is None and method:
-        session_id = request.headers.get("mcp-session-id") or user
+        session_id = resolve_session_id(request, user)
         return Response(
             status_code=204,
             headers={
@@ -667,7 +701,7 @@ async def messages_endpoint(request: Request):
             )
         }
     elif method == "notifications/initialized":
-        session_id = request.headers.get("mcp-session-id") or user
+        session_id = resolve_session_id(request, user)
         return Response(
             status_code=204,
             headers={
@@ -1071,7 +1105,7 @@ async def messages_endpoint(request: Request):
         else:
             resp["error"] = {"code": -32601, "message": f"Unknown tool: {name}"}
             broadcast_sse(user, resp)
-            session_id = request.headers.get("mcp-session-id") or user
+            session_id = resolve_session_id(request, user)
             return JSONResponse(
                 resp,
                 headers={
@@ -1127,7 +1161,7 @@ async def messages_endpoint(request: Request):
         else:
             resp["error"] = {"code": -32602, "message": f"Resource not found: {uri}"}
             broadcast_sse(user, resp)
-            session_id = request.headers.get("mcp-session-id") or user
+            session_id = resolve_session_id(request, user)
             return JSONResponse(
                 resp,
                 headers={
@@ -1158,7 +1192,7 @@ async def messages_endpoint(request: Request):
     # payload itself is correct.
     # The id we issued at initialize must be the one the client sees here, or the
     # client believes it holds a different session than the one it opened.
-    session_id = request.headers.get("mcp-session-id") or issued_session_id or user
+    session_id = issued_session_id or resolve_session_id(request, user)
     headers = {
         "mcp-session-id": session_id,
         "mcp-protocol-version": protocol_version_for(user),
@@ -1212,7 +1246,7 @@ async def mcp_unified_endpoint(request: Request):
                 }
             )
         client_ip = request.client.host if request.client else "unknown"
-        session_id = request.headers.get("mcp-session-id") or user
+        session_id = resolve_session_id(request, user)
         logger.info(f"Session teardown (DELETE) from {client_ip} [{user}] session_id={session_id[:12]}…")
 
         # Forget the session we issued for this connection. Streams live under
