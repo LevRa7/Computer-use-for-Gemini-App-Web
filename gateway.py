@@ -28,6 +28,17 @@ active_tunnels = {}  # user -> {"ws": WebSocket, "pending": {req_id: Future}}
 active_sse_subscribers = {}  # user -> set of asyncio.Queue
 active_sse_sessions = {}  # session_id -> asyncio.Queue
 
+# Negotiated protocol version per user. The value must be identical in the
+# initialize result AND in the mcp-protocol-version header of every response: a
+# client that asked for 2025-11-25 and reads 2024-11-05 back in the header can
+# reject the answer as belonging to a different protocol revision.
+active_protocol_versions = {}
+DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+
+
+def protocol_version_for(user: str) -> str:
+    return active_protocol_versions.get(user, DEFAULT_PROTOCOL_VERSION)
+
 def broadcast_sse(user: str, message: dict):
     if user in active_sse_subscribers:
         data = json.dumps(message, ensure_ascii=False)
@@ -407,7 +418,7 @@ async def sse_endpoint(request: Request):
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
             }
         )
 
@@ -460,7 +471,7 @@ async def sse_endpoint(request: Request):
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
             "mcp-session-id": session_id,
-            "mcp-protocol-version": "2024-11-05",
+            "mcp-protocol-version": protocol_version_for(user),
         }
     )
 
@@ -473,7 +484,7 @@ async def messages_endpoint(request: Request):
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
             }
         )
 
@@ -492,7 +503,7 @@ async def messages_endpoint(request: Request):
             status_code=204,
             headers={
                 "mcp-session-id": session_id,
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
             }
@@ -538,6 +549,7 @@ async def messages_endpoint(request: Request):
             negotiated = client_version
         else:
             negotiated = "2024-11-05"
+        active_protocol_versions[user] = negotiated
         logger.info(f"initialize: client requested protocolVersion={client_version!r} "
                     f"clientInfo={(params or {}).get('clientInfo')} -> answering {negotiated}")
         resp["result"] = {
@@ -573,7 +585,7 @@ async def messages_endpoint(request: Request):
             status_code=204,
             headers={
                 "mcp-session-id": session_id,
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
             }
@@ -975,7 +987,7 @@ async def messages_endpoint(request: Request):
                 resp,
                 headers={
                     "mcp-session-id": session_id,
-                    "mcp-protocol-version": "2024-11-05",
+                    "mcp-protocol-version": protocol_version_for(user),
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
                 }
@@ -1031,7 +1043,7 @@ async def messages_endpoint(request: Request):
                 resp,
                 headers={
                     "mcp-session-id": session_id,
-                    "mcp-protocol-version": "2024-11-05",
+                    "mcp-protocol-version": protocol_version_for(user),
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
                 }
@@ -1058,7 +1070,7 @@ async def messages_endpoint(request: Request):
     session_id = request.headers.get("mcp-session-id") or user
     headers = {
         "mcp-session-id": session_id,
-        "mcp-protocol-version": "2024-11-05",
+        "mcp-protocol-version": protocol_version_for(user),
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
     }
@@ -1079,7 +1091,7 @@ async def mcp_unified_endpoint(request: Request):
                 "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, HEAD",
                 "Access-Control-Allow-Headers": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
             }
         )
     if request.method == "DELETE":
@@ -1091,7 +1103,7 @@ async def mcp_unified_endpoint(request: Request):
                 headers={
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                    "mcp-protocol-version": "2024-11-05",
+                    "mcp-protocol-version": protocol_version_for(user),
                 }
             )
         client_ip = request.client.host if request.client else "unknown"
@@ -1111,7 +1123,7 @@ async def mcp_unified_endpoint(request: Request):
             status_code=204,
             headers={
                 "mcp-session-id": session_id,
-                "mcp-protocol-version": "2024-11-05",
+                "mcp-protocol-version": protocol_version_for(user),
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, HEAD",
                 "Access-Control-Allow-Headers": "*",
@@ -1129,7 +1141,7 @@ async def mcp_unified_endpoint(request: Request):
                     headers={
                         "Access-Control-Allow-Origin": "*",
                         "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                        "mcp-protocol-version": "2024-11-05",
+                        "mcp-protocol-version": protocol_version_for(user),
                     }
                 )
             accept = (request.headers.get("accept") or "").lower()
@@ -1153,7 +1165,7 @@ async def mcp_unified_endpoint(request: Request):
             }, headers={
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-                "mcp-protocol-version": "2024-11-05"
+                "mcp-protocol-version": protocol_version_for(user)
             })
         return await sse_endpoint(request)
     if request.method == "POST":
@@ -1164,7 +1176,7 @@ async def mcp_unified_endpoint(request: Request):
             "Allow": "GET, POST, DELETE, OPTIONS, HEAD",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
-            "mcp-protocol-version": "2024-11-05",
+            "mcp-protocol-version": protocol_version_for(user),
         }
     )
 
