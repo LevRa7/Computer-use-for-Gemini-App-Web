@@ -294,9 +294,9 @@ if ([string]::IsNullOrWhiteSpace($User)) {
 }
 
 if ($Lang -eq "ru") {
-    Write-Host "[2/3] Регистрация субдомена '$User' на шлюзе ($Gateway)..." -ForegroundColor Yellow
+    Write-Host "[2/3] Регистрация узла '$User' на общем домене ($Gateway)..." -ForegroundColor Yellow
 } else {
-    Write-Host "[2/3] Registering subdomain '$User' on gateway ($Gateway)..." -ForegroundColor Yellow
+    Write-Host "[2/3] Registering node '$User' on the shared domain ($Gateway)..." -ForegroundColor Yellow
 }
 $detectedMac = ""
 try {
@@ -330,7 +330,20 @@ $response = Invoke-RestMethod -Uri "https://$Gateway/api/register" -Method Post 
 
 $AssignedUser = $response.username
 $AssignedToken = $response.token
+
+# ------------------------------------------------------------------------------
+# SHARED-DOMAIN CONTRACT: one public domain serves every node and the node is
+# selected by ?user=<node-name>. Never build a per-device subdomain URL: each
+# extra hostname needs its own DNS record and TLS SAN, and a missing SAN makes
+# the Gemini client fail with an opaque "cannot connect to host" error.
+# The gateway returns this canonical URL; the fallback keeps older gateways
+# working without ever advertising a subdomain.
+# ------------------------------------------------------------------------------
+$PublicBaseUrl = "https://$Gateway"
 $SseUrl = $response.sse_url
+if ([string]::IsNullOrWhiteSpace($SseUrl)) {
+    $SseUrl = "$PublicBaseUrl/sse?user=$AssignedUser&token=$AssignedToken"
+}
 
 # Quick Copy to Clipboard
 $Copied = $false

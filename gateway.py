@@ -11,6 +11,7 @@ import shutil
 import socket
 import time
 import uuid
+from urllib.parse import urlparse
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -40,6 +41,39 @@ DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 # Set MESH_LEGACY_SSE=1 to switch a client that holds an open stream onto that
 # contract; leave it unset for the current "answer in the body too" behaviour.
 LEGACY_SSE = os.environ.get("MESH_LEGACY_SSE", "").strip() in ("1", "true", "yes")
+
+# ---------------------------------------------------------------------------
+# ONE SHARED DOMAIN FOR EVERY NODE (canonical URL contract)
+# ---------------------------------------------------------------------------
+# Every node is reached through the same public domain and is selected by the
+# ?user= query parameter. Per-device subdomains are deliberately NOT issued:
+#   * each extra hostname needs its own DNS record and its own SAN in the TLS
+#     certificate, so a device whose name is missing from the certificate fails
+#     the handshake and the client reports an opaque "cannot connect to host";
+#   * the node name stops being a security-relevant routing key, which keeps the
+#     installer's "name already taken -> node-2" behaviour harmless.
+# Canonical endpoints (see README "Connecting to Google Gemini"):
+#   SSE      https://<shared-domain>/sse?user=<node>&token=<token>
+#   HTTP     https://<shared-domain>/mcp?user=<node>&token=<token>
+#   Tunnel   wss://<shared-domain>/ws/tunnel?user=<node>&token=<token>
+# Override the shared domain with MESH_PUBLIC_URL (or AGY_PUBLIC_BASE_URL).
+PUBLIC_BASE_URL = (
+    os.environ.get("MESH_PUBLIC_URL")
+    or os.environ.get("AGY_PUBLIC_BASE_URL")
+    or "https://smart-server.online"
+).strip().rstrip("/")
+PUBLIC_HOST = urlparse(PUBLIC_BASE_URL).netloc or PUBLIC_BASE_URL
+
+# Legacy per-device subdomain resolution. Kept only so URLs handed out before the
+# shared-domain contract keep working; never advertised, and it logs a warning.
+LEGACY_SUBDOMAIN_ACCESS = os.environ.get("MESH_LEGACY_SUBDOMAIN", "1").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
+
+def public_url(path: str, user: str, token: str) -> str:
+    """Canonical public URL for one node on the shared domain."""
+    return f"{PUBLIC_BASE_URL}{path}?user={user}&token={token}"
 
 
 def protocol_version_for(user: str) -> str:
@@ -94,17 +128,30 @@ def tokens_equal(a: str, b: str) -> bool:
 
 
 def get_target_user(request: Request) -> str:
-    host = request.headers.get("host", "")
-    host_part = host.split(":")[0].lower()
-    base = "smart-server.online"
-    if host_part.endswith(f".{base}") and host_part != base:
-        sub = host_part[:-len(base)-1]
-        parts = sub.split(".")
-        return parts[-1].lower()
-    # Fallback to query param if directly accessing the root domain
-    user = request.query_params.get("user")
+    """Resolve which node a request addresses.
+
+    Canonical form: ``<shared-domain>/...?user=<node>&token=<token>``. The shared
+    domain only selects the gateway, so ``?user=`` is authoritative. A per-device
+    subdomain is accepted as a legacy fallback (MESH_LEGACY_SUBDOMAIN=0 disables
+    it) and logs a warning telling the caller to switch to the canonical URL.
+    """
+    user = (request.query_params.get("user") or "").strip()
     if user:
         return user.lower()
+
+    if LEGACY_SUBDOMAIN_ACCESS:
+        host_part = request.headers.get("host", "").split(":")[0].lower()
+        base = PUBLIC_HOST.lower()
+        if host_part.endswith(f".{base}") and host_part != base:
+            sub = host_part[:-len(base)-1]
+            parts = sub.split(".")
+            legacy_user = parts[-1].lower()
+            logger.warning(
+                "Legacy per-device subdomain '%s' used instead of the shared domain; "
+                "switch to %s/sse?user=%s&token=...", host_part, PUBLIC_BASE_URL, legacy_user,
+            )
+            return legacy_user
+
     return "anonymous"
 
 def get_request_token(request: Request) -> str:
@@ -118,7 +165,10 @@ def get_request_token(request: Request) -> str:
 def verify_token(request: Request) -> tuple[bool, str, str]:
     user = get_target_user(request)
     if user == "anonymous":
-        return False, "Host subdomain is missing user identity.", ""
+        return False, (
+            "Node identity is missing. Use the shared-domain URL form "
+            f"{PUBLIC_BASE_URL}/sse?user=<node-name>&token=<your_token>."
+        ), ""
     registry = load_registry()
     if user not in registry:
         return False, f"User '{user}' is not registered.", user
@@ -131,9 +181,9 @@ def verify_token(request: Request) -> tuple[bool, str, str]:
 def get_skill(user: str, host: str) -> str:
     return f"""# 🌐 Antigravity Mesh — Node Orchestrator ({user})
 
-Target Node: {user}.smart-server.online
-Endpoint: https://{user}.smart-server.online/sse
-Mode: Secure Cloud Gateway + Reverse Tunnel
+Target Node: {user} (shared gateway {PUBLIC_HOST})
+Endpoint: {PUBLIC_BASE_URL}/sse?user={user}&token=<your_token>
+Mode: Secure Cloud Gateway + Reverse Tunnel (one shared domain for every node)
 
 MANDATORY GROUNDING & EXECUTION DIRECTIVES:
 1. You are connected directly to the user's execution node '{user}' via Antigravity Mesh MCP tools.
@@ -238,7 +288,7 @@ async def health(request: Request):
     return JSONResponse({
         "status": "healthy",
         "service": "antigravity_mesh_gateway",
-        "host": "smart-server.online",
+        "host": PUBLIC_HOST,
         "target_user": user,
         "node_online": is_online,
         "active_tunnels_count": len(active_tunnels),
@@ -286,7 +336,7 @@ async def api_register(request: Request):
         for u, entry in registry.items():
             entry_mac = entry.get("mac_address", "").lower()
             if entry_mac == clean_mac:
-                logger.info(f"Reusing existing subdomain '{u}' for MAC {clean_mac}")
+                logger.info(f"Reusing existing node registration '{u}' for MAC {clean_mac}")
                 entry["last_seen"] = now_iso
                 if clean_os and not entry.get("os"):
                     entry["os"] = clean_os
@@ -296,9 +346,9 @@ async def api_register(request: Request):
                     "status": "success",
                     "username": u,
                     "token": token,
-                    "subdomain": f"{u}.smart-server.online",
-                    "sse_url": f"https://smart-server.online/sse?user={u}&token={token}",
-                    "tunnel_url": f"wss://smart-server.online/ws/tunnel?user={u}&token={token}",
+                    "gateway": PUBLIC_HOST,
+                    "sse_url": public_url("/sse", u, token),
+                    "tunnel_url": f"wss://{PUBLIC_HOST}/ws/tunnel?user={u}&token={token}",
                     "reused": True,
                     "instructions": f"Antigravity Mesh node '{user}'. Direct access to the real remote host over a reverse tunnel. "
                 f"Do not guess paths or outputs: use list_dir/glob_find/grep_search/read_file/bash_exec/"
@@ -322,9 +372,9 @@ async def api_register(request: Request):
                 "status": "success",
                 "username": clean_user,
                 "token": token,
-                "subdomain": f"{clean_user}.smart-server.online",
-                "sse_url": f"https://smart-server.online/sse?user={clean_user}&token={token}",
-                "tunnel_url": f"wss://smart-server.online/ws/tunnel?user={clean_user}&token={token}",
+                "gateway": PUBLIC_HOST,
+                "sse_url": public_url("/sse", clean_user, token),
+                "tunnel_url": f"wss://{PUBLIC_HOST}/ws/tunnel?user={clean_user}&token={token}",
                 "reused": True,
                 "instructions": "Authenticated and updated existing user registration."
             })
@@ -374,9 +424,9 @@ async def api_register(request: Request):
         "status": "success",
         "username": clean_user,
         "token": token,
-        "subdomain": f"{clean_user}.smart-server.online",
-        "sse_url": f"https://smart-server.online/sse?user={clean_user}&token={token}",
-        "tunnel_url": f"wss://smart-server.online/ws/tunnel?user={clean_user}&token={token}",
+        "gateway": PUBLIC_HOST,
+        "sse_url": public_url("/sse", clean_user, token),
+        "tunnel_url": f"wss://{PUBLIC_HOST}/ws/tunnel?user={clean_user}&token={token}",
         "reused": False,
         "instructions": "Add the sse_url to Google Gemini Web (Settings -> MCP)."
     })
@@ -389,7 +439,7 @@ async def oauth_discovery(request: Request):
     a bearer token in the URL, so the honest answer is metadata that advertises
     no authorization server and no bearer requirement for discovery.
     """
-    host = request.headers.get("host", "smart-server.online")
+    host = request.headers.get("host", PUBLIC_HOST)
     base = f"https://{host}"
     return JSONResponse(
         {
@@ -799,7 +849,7 @@ async def messages_endpoint(request: Request):
         args = params.get("arguments", {})
         is_error = False
         if name == "get_orchestration_skill":
-            content_text = get_skill(user, request.headers.get("host", "smart-server.online"))
+            content_text = get_skill(user, request.headers.get("host", PUBLIC_HOST))
         elif name == "mesh_status":
             res = await call_remote_tool(user, name, args)
             err = remote_tool_error(res)
@@ -1029,7 +1079,7 @@ async def messages_endpoint(request: Request):
             "prompts": [{"name": "antigravity-orchestrator", "description": f"Orchestrator role for {user}"}]
         }
     elif method == "prompts/get":
-        skill_text = get_skill(user, request.headers.get("host", "smart-server.online"))
+        skill_text = get_skill(user, request.headers.get("host", PUBLIC_HOST))
         resp["result"] = {
             "description": "Antigravity Orchestrator Persona",
             "messages": [{"role": "user", "content": {"type": "text", "text": skill_text}}]
@@ -1045,7 +1095,7 @@ async def messages_endpoint(request: Request):
     elif method == "resources/read":
         uri = params.get("uri")
         if uri == "resource://skills/orchestrator.md":
-            text = get_skill(user, request.headers.get("host", "smart-server.online"))
+            text = get_skill(user, request.headers.get("host", PUBLIC_HOST))
             resp["result"] = {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]}
         else:
             resp["error"] = {"code": -32602, "message": f"Resource not found: {uri}"}
