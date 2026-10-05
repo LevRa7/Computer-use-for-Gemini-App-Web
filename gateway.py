@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import datetime
 import hmac
 import json
@@ -166,6 +167,27 @@ async def call_remote_tool(user: str, name: str, args: dict) -> dict:
         return {"exit_code": 124, "error": f"Command timed out after 25s on node '{user}'"}
     except Exception as e:
         tunnel["pending"].pop(req_id, None)
+        # Self-heal: a dropped tunnel (network flap, agent restart) is transient.
+        # Wait for the agent to come back and replay the call once instead of
+        # failing the client's request.
+        logger.warning(f"Tunnel call to '{user}' failed ({e}); waiting for reconnect and retrying once")
+        for _ in range(20):                      # up to ~10 seconds
+            await asyncio.sleep(0.5)
+            fresh = active_tunnels.get(user)
+            if fresh and fresh.get("ws") and fresh.get("ws") is not tunnel.get("ws"):
+                try:
+                    retry_id = str(uuid.uuid4())
+                    retry_fut = asyncio.get_running_loop().create_future()
+                    fresh["pending"][retry_id] = retry_fut
+                    await fresh["ws"].send_text(json.dumps({"id": retry_id, "method": "tools/call",
+                                                            "params": {"name": name, "arguments": args}}))
+                    res_msg = await asyncio.wait_for(retry_fut, timeout=20.0)
+                    logger.info(f"Retry after reconnect succeeded for '{user}'")
+                    return res_msg.get("result", res_msg)
+                except Exception as retry_exc:
+                    fresh["pending"].pop(retry_id, None)
+                    logger.warning(f"Retry after reconnect failed for '{user}': {retry_exc}")
+                    break
         return {"exit_code": 1, "error": str(e)}
 
 def remote_tool_error(res):
@@ -338,14 +360,30 @@ async def api_register(request: Request):
     })
 
 async def oauth_discovery(request: Request):
+    """RFC 9728 protected-resource metadata.
+
+    Returning 404 here made every MCP client log a connection error while
+    connecting (Gemini Spark probes this path twice). The mesh authenticates with
+    a bearer token in the URL, so the honest answer is metadata that advertises
+    no authorization server and no bearer requirement for discovery.
+    """
+    host = request.headers.get("host", "smart-server.online")
+    base = f"https://{host}"
     return JSONResponse(
-        {"error": "not_found", "message": "OAuth 2.0 discovery not required for Bearer/Token mesh"},
-        status_code=404,
+        {
+            "resource": base,
+            "authorization_servers": [],
+            "bearer_methods_supported": ["query", "header"],
+            "scopes_supported": [],
+            "resource_documentation": "https://github.com/LevRa7/Computer-use-for-Gemini-App-Web",
+            "resource_name": "Antigravity Mesh",
+        },
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
             "Access-Control-Allow-Headers": "*",
-        }
+            "Cache-Control": "public, max-age=300",
+        },
     )
 
 async def sse_endpoint(request: Request):
@@ -1125,7 +1163,53 @@ middleware = [
     )
 ]
 
-app = Starlette(debug=False, routes=routes, middleware=middleware)
+async def tunnel_watchdog():
+    """Background self-healing loop.
+
+    A websocket can die without a clean close (NAT timeout, host sleep). The entry
+    then stays in active_tunnels, so /health reports the node online while every
+    call hangs until the 28 s timeout. This loop removes such entries, prunes SSE
+    queues nobody consumes and keeps the state truthful.
+    """
+    logger.info("Self-heal watchdog started (30s interval)")
+    while True:
+        try:
+            await asyncio.sleep(30)
+            for user, tunnel in list(active_tunnels.items()):
+                ws = tunnel.get("ws")
+                state = getattr(getattr(ws, "client_state", None), "name", "UNKNOWN")
+                if ws is None or state not in ("CONNECTED",):
+                    logger.warning(f"Watchdog: removing stale tunnel for '{user}' (state={state})")
+                    for fut in list(tunnel.get("pending", {}).values()):
+                        if not fut.done():
+                            fut.set_exception(ConnectionResetError("Tunnel was stale"))
+                    active_tunnels.pop(user, None)
+            # drop subscriber queues that no stream is reading any more
+            for user, queues in list(active_sse_subscribers.items()):
+                alive = {q for q in queues if not q.empty() or q in active_sse_sessions.values()}
+                if alive != queues:
+                    active_sse_subscribers[user] = alive
+                if not alive:
+                    active_sse_subscribers.pop(user, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:                 # never let the watchdog die
+            logger.warning(f"Watchdog error: {exc}")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Start the self-healing watchdog with the app (modern Starlette API)."""
+    task = asyncio.create_task(tunnel_watchdog())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+app = Starlette(debug=False, routes=routes, middleware=middleware, lifespan=lifespan)
+
+
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8096, log_level="info", timeout_graceful_shutdown=2)
