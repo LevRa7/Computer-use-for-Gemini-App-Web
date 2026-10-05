@@ -53,6 +53,64 @@ except Exception:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
+# Platform / command shell
+# ---------------------------------------------------------------------------
+
+_IS_WINDOWS = os.name == "nt"
+
+#: Hide the console window of every child process on Windows: the node runs
+#: hidden, and a flashing window per command would be the only thing the user sees.
+_POPEN_FLAGS = 0
+if _IS_WINDOWS:  # pragma: no cover - Windows only
+    _POPEN_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(
+        subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+
+_SHELL_CACHE: Optional[Tuple[str, List[str]]] = None
+
+
+def _git_bash_windows() -> Optional[str]:
+    """Git for Windows' bash.exe, never System32\\bash.exe.
+
+    On Windows "bash" on PATH is normally the WSL launcher: it runs the command
+    inside a Linux VM (wrong files, wrong processes) or fails without WSL.
+    """
+    roots = [os.environ.get(k) for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA")]
+    candidates = []
+    for root in filter(None, roots):
+        candidates.append(os.path.join(root, "Git", "bin", "bash.exe"))
+        candidates.append(os.path.join(root, "Programs", "Git", "bin", "bash.exe"))
+    git = shutil.which("git")
+    if git:  # ...\Git\cmd\git.exe -> ...\Git\bin\bash.exe
+        candidates.append(os.path.join(os.path.dirname(os.path.dirname(git)), "bin", "bash.exe"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def command_shell() -> Tuple[str, List[str]]:
+    """(name, argv prefix) of the shell that runs bash_exec / run_job commands."""
+    global _SHELL_CACHE
+    if _SHELL_CACHE is None:
+        if _IS_WINDOWS:
+            bash = _git_bash_windows()
+            if bash:
+                _SHELL_CACHE = ("git-bash", [bash, "-c"])
+            else:
+                ps = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+                _SHELL_CACHE = ("powershell", [ps, "-NoLogo", "-NoProfile", "-NonInteractive",
+                                               "-ExecutionPolicy", "Bypass", "-Command"])
+        else:
+            bash = shutil.which("bash")
+            _SHELL_CACHE = ("bash", [bash, "-c"]) if bash else ("sh", ["/bin/sh", "-c"])
+    return _SHELL_CACHE
+
+
+def _shell_argv(command: str) -> List[str]:
+    return command_shell()[1] + [command]
+
+
+# ---------------------------------------------------------------------------
 # Configuration / module state
 # ---------------------------------------------------------------------------
 
@@ -472,6 +530,9 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
         "desktop": os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or "",
         "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
         "shell": os.environ.get("SHELL", ""),
+        # The shell bash_exec/run_job really use: on a Windows node without Git
+        # Bash this is PowerShell, and commands must be written for it.
+        "command_shell": command_shell()[0],
         "disks": run("df -h --output=target,size,used,avail,pcent 2>/dev/null | head -8"),
         "memory": run("free -h 2>/dev/null | head -3"),
         "load": run("uptime"),
@@ -573,12 +634,14 @@ def _run_bash(command: str, timeout: int) -> Tuple[str, str, int, float]:
     started = time.time()
     try:
         proc = subprocess.run(
-            ["bash", "-c", command],
+            _shell_argv(command),
             cwd=_WORKSPACE if os.path.isdir(_WORKSPACE) else None,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
             errors="replace",
+            creationflags=_POPEN_FLAGS,
         )
         return proc.stdout or "", proc.stderr or "", proc.returncode, round(time.time() - started, 3)
     except subprocess.TimeoutExpired as exc:
@@ -1024,6 +1087,8 @@ def _pid_alive(pid: Any, start_time: Any = None) -> bool:
                 return False
         except (TypeError, ValueError):
             pass
+    if _IS_WINDOWS:
+        return _pid_alive_windows(pid_int)
     try:
         os.kill(pid_int, 0)
     except ProcessLookupError:
@@ -1033,6 +1098,32 @@ def _pid_alive(pid: Any, start_time: Any = None) -> bool:
     except Exception:
         return False
     return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Liveness probe for Windows.
+
+    os.kill(pid, 0) must never be used there: any signal other than
+    CTRL_C/CTRL_BREAK goes to TerminateProcess, so the "probe" would kill the
+    very job it checks.
+    """
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
 
 
 def _duration_from_meta(meta: Dict[str, Any]) -> Optional[float]:
@@ -1209,13 +1300,14 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             proc = subprocess.Popen(
-                ["bash", "-c", command],
+                _shell_argv(command),
                 cwd=cwd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
-                start_new_session=True,
+                start_new_session=not _IS_WINDOWS,
+                creationflags=_POPEN_FLAGS,
             )
         except Exception as exc:
             return {"error": "failed to start job: %s" % exc}
@@ -1338,13 +1430,25 @@ def _tool_job_output(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "job_output failed: %s" % exc}
 
 
+# Windows' signal module has no SIGKILL/SIGHUP/SIGQUIT: a literal dict of them
+# raised AttributeError at import, so the whole node failed to start there.
 _SIGNALS = {
-    "TERM": _signal.SIGTERM,
-    "KILL": _signal.SIGKILL,
-    "INT": _signal.SIGINT,
-    "HUP": _signal.SIGHUP,
-    "QUIT": _signal.SIGQUIT,
+    name: getattr(_signal, "SIG" + name)
+    for name in ("TERM", "KILL", "INT", "HUP", "QUIT")
+    if hasattr(_signal, "SIG" + name)
 }
+if _IS_WINDOWS:
+    # Every name is accepted on Windows; the job is ended with a tree kill.
+    for _name in ("TERM", "KILL", "INT", "HUP", "QUIT"):
+        _SIGNALS.setdefault(_name, _signal.SIGTERM)
+
+
+def _kill_tree_windows(pid: int) -> None:
+    """End a job and its children on Windows (there are no process groups to signal)."""
+    proc = subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))],
+                          capture_output=True, text=True, timeout=15)
+    if proc.returncode != 0:
+        raise OSError((proc.stderr or proc.stdout or "taskkill failed").strip())
 
 
 def _tool_job_kill(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1373,15 +1477,22 @@ def _tool_job_kill(args: Dict[str, Any]) -> Dict[str, Any]:
 
         pid = meta.get("pid")
         delivered = False
-        try:
-            os.killpg(os.getpgid(int(pid)), sig)
-            delivered = True
-        except Exception:
+        if _IS_WINDOWS:
             try:
-                os.kill(int(pid), sig)
+                _kill_tree_windows(int(pid))
                 delivered = True
             except Exception as exc:
-                return {"error": "failed to signal job %s: %s" % (job_id, exc)}
+                return {"error": "failed to stop job %s: %s" % (job_id, exc)}
+        else:
+            try:
+                os.killpg(os.getpgid(int(pid)), sig)
+                delivered = True
+            except Exception:
+                try:
+                    os.kill(int(pid), sig)
+                    delivered = True
+                except Exception as exc:
+                    return {"error": "failed to signal job %s: %s" % (job_id, exc)}
 
         if delivered:
             _update_meta(job_id, status="killed", finished_at=_now_iso(), duration=_duration_from_meta(meta))
