@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+venv/
+.venv/
+*.log
+*.jsonl
+live_logs/
+registry.json
+token.json
+webhook_secret.txt
