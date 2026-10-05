@@ -126,14 +126,24 @@ def resolve_session_id(request: Request, user: str) -> str:
 def protocol_version_for(user: str) -> str:
     return active_protocol_versions.get(user, DEFAULT_PROTOCOL_VERSION)
 
-def broadcast_sse(user: str, message: dict):
-    if user in active_sse_subscribers:
-        data = json.dumps(message, ensure_ascii=False)
-        for q in list(active_sse_subscribers[user]):
-            try:
-                q.put_nowait(data)
-            except Exception:
-                pass
+def broadcast_sse(user: str, message: dict) -> int:
+    """Queue a JSON-RPC frame on every open stream of this user.
+
+    Returns how many streams received it. The count is logged because it is the
+    only way to tell a client that reads results from the stream (Gemini Spark)
+    whether the answer actually had a live stream to land on: a response
+    broadcast to 0 streams reaches nobody on that channel.
+    """
+    data = json.dumps(message, ensure_ascii=False)
+    queues = list(active_sse_subscribers.get(user, ()))
+    for q in queues:
+        try:
+            q.put_nowait(data)
+        except Exception:
+            pass
+    label = message.get("method") or f"id={message.get('id')}"
+    logger.info(f"broadcast [{label}] for '{user}' to {len(queues)} open stream(s)")
+    return len(queues)
 
 RESERVED_NAMES = {
     "admin", "administrator", "root", "api", "api-ag", "api-agy",
@@ -547,6 +557,11 @@ async def sse_endpoint(request: Request):
     active_sse_subscribers[user].add(queue)
     # stored under the per-connection key, not the shared client-visible id
     active_sse_sessions[stream_key] = queue
+    logger.info(
+        f"SSE stream opened for '{user}' (stream_key={stream_key}, "
+        f"session={session_id[:12]}…, path={request.url.path}, "
+        f"open_now={len(active_sse_subscribers[user])})"
+    )
 
     async def event_generator():
         try:
