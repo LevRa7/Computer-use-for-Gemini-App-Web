@@ -369,7 +369,11 @@ async def sse_endpoint(request: Request):
         )
 
     token = get_request_token(request)
-    session_id = request.headers.get("mcp-session-id") or str(uuid.uuid4())
+    # The session id MUST match the one returned by POST responses. Generating a
+    # random UUID here while messages_endpoint answers with the user name made a
+    # client see two different sessions for one connection: it aborted the
+    # session (DELETE) and re-initialised in a loop.
+    session_id = request.headers.get("mcp-session-id") or user
     queue = asyncio.Queue()
     if user not in active_sse_subscribers:
         active_sse_subscribers[user] = set()
@@ -934,8 +938,13 @@ async def messages_endpoint(request: Request):
     else:
         resp["error"] = {"code": -32601, "message": f"Method not found: {method}"}
 
-    # Broadcast response to active SSE stream (for SSE clients)
-    broadcast_sse(user, resp)
+    # Deliver the answer on the SSE stream only for the legacy endpoint that the
+    # `event: endpoint` announcement points at (/messages). Clients that POST to
+    # /sse or /mcp read the response from this HTTP body; broadcasting it as well
+    # would hand them every answer twice, and a strict client reacts to the
+    # unexpected message by aborting the session and starting over.
+    if request.url.path.rstrip("/") == "/messages":
+        broadcast_sse(user, resp)
 
     # Return response in HTTP body (for Streamable HTTP clients) with Mcp-Session-Id header
     session_id = request.headers.get("mcp-session-id") or user
