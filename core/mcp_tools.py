@@ -88,18 +88,60 @@ def _git_bash_windows() -> Optional[str]:
     return None
 
 
+def powershell_argv() -> Optional[List[str]]:
+    """argv prefix of PowerShell, or None when it is not installed.
+
+    ``pwsh`` (PowerShell 7) wins over ``powershell`` (5.1) when both exist; the
+    flags make a one-shot command behave like a script call: no profile, no
+    banner, no interactive prompt and no execution-policy surprise.
+    """
+    ps = shutil.which("pwsh") or shutil.which("powershell")
+    if not ps:
+        return None
+    return [ps, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
+
+
+def cmd_argv() -> List[str]:
+    """argv prefix of cmd.exe (present on every Windows). ``/d`` skips AutoRun,
+    ``/s`` keeps the quoting of the whole command intact, ``/c`` runs and exits."""
+    return [os.environ.get("COMSPEC") or "cmd.exe", "/d", "/s", "/c"]
+
+
+def default_windows_shell() -> Tuple[str, List[str]]:
+    """PowerShell when present, cmd.exe otherwise.
+
+    Windows never defaults to bash: a stock box has no bash, the ``bash`` on PATH
+    is usually the WSL launcher (a different filesystem and process namespace),
+    and Git Bash is a third-party extra. Both cmd.exe and PowerShell ship with
+    the OS, and PowerShell can do everything cmd.exe can, so it is the default.
+    """
+    ps = powershell_argv()
+    if ps:
+        return ("powershell", ps)
+    return ("cmd", cmd_argv())
+
+
 def command_shell() -> Tuple[str, List[str]]:
-    """(name, argv prefix) of the shell that runs bash_exec / run_job commands."""
+    """(name, argv prefix) of the shell that runs bash_exec / run_job commands.
+
+    Windows: PowerShell by default, cmd.exe when PowerShell is missing, bash only
+    when the operator asks for it. ``MESH_SHELL`` selects explicitly:
+
+        MESH_SHELL=cmd       cmd.exe (native syntax, no PowerShell startup cost)
+        MESH_SHELL=git-bash  Git for Windows' bash, when it is installed
+        (unset)              PowerShell, else cmd.exe
+    """
     global _SHELL_CACHE
     if _SHELL_CACHE is None:
         if _IS_WINDOWS:
-            bash = _git_bash_windows()
-            if bash:
-                _SHELL_CACHE = ("git-bash", [bash, "-c"])
+            override = os.environ.get("MESH_SHELL", "").strip().lower()
+            if override in ("cmd", "cmd.exe"):
+                _SHELL_CACHE = ("cmd", cmd_argv())
+            elif override in ("git-bash", "gitbash", "bash"):
+                bash = _git_bash_windows()
+                _SHELL_CACHE = ("git-bash", [bash, "-c"]) if bash else default_windows_shell()
             else:
-                ps = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
-                _SHELL_CACHE = ("powershell", [ps, "-NoLogo", "-NoProfile", "-NonInteractive",
-                                               "-ExecutionPolicy", "Bypass", "-Command"])
+                _SHELL_CACHE = default_windows_shell()
         else:
             bash = shutil.which("bash")
             _SHELL_CACHE = ("bash", [bash, "-c"]) if bash else ("sh", ["/bin/sh", "-c"])
@@ -501,6 +543,141 @@ def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# ---------------------------------------------------------------------------
+# system_info: per-platform telemetry and wallpaper
+# ---------------------------------------------------------------------------
+
+def system_info_posix_commands() -> Dict[str, str]:
+    """The four telemetry blocks on Linux/macOS."""
+    return {
+        "disks": "df -h --output=target,size,used,avail,pcent 2>/dev/null | head -8",
+        "memory": "free -h 2>/dev/null | head -3",
+        "load": "uptime",
+        "top_processes": "ps -eo comm,%mem --sort=-%mem 2>/dev/null | head -6",
+    }
+
+
+def system_info_windows_scripts() -> Dict[str, str]:
+    """The same four blocks as PowerShell scripts.
+
+    Windows has no ``df``/``free``/``uptime``/``ps``: the POSIX versions came
+    back as ``'df' is not recognized as an internal or external command`` and the
+    model read that as an error. These are read-only CIM queries. They are run
+    through PowerShell explicitly rather than through ``command_shell()``, so
+    telemetry keeps working when the node is configured with ``MESH_SHELL=cmd``
+    for the user's own commands.
+    """
+    size_gb = "($_.Size/1GB)"
+    free_gb = "($_.FreeSpace/1GB)"
+    return {
+        "disks": (
+            "Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
+            "$pct = 0; if ($_.Size -gt 0) { $pct = 100 * $_.FreeSpace / $_.Size }; "
+            "'{0} {1:N1}G total, {2:N1}G free ({3:N0}% free)' -f "
+            f"$_.DeviceID, {size_gb}, {free_gb}, $pct "
+            "} | Out-String"
+        ),
+        "memory": (
+            "$os = Get-CimInstance Win32_OperatingSystem; "
+            "'              total        used        free' + [Environment]::NewLine + "
+            "'Mem:  {0,10:N1}G {1,10:N1}G {2,10:N1}G' -f "
+            "($os.TotalVisibleMemorySize/1MB), "
+            "(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory)/1MB), "
+            "($os.FreePhysicalMemory/1MB) | Out-String"
+        ),
+        "load": (
+            "$os = Get-CimInstance Win32_OperatingSystem; "
+            "$cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; "
+            "'CPU load {0:N0}% ; booted {1:yyyy-MM-dd HH:mm} ; up {2:N1} h' -f "
+            "$cpu, $os.LastBootUpTime, (New-TimeSpan -Start $os.LastBootUpTime).TotalHours | Out-String"
+        ),
+        "top_processes": (
+            "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 "
+            "@{n='COMMAND';e={$_.ProcessName}}, @{n='MEM_MB';e={[math]::Round($_.WorkingSet64/1MB,1)}} | "
+            "Format-Table -AutoSize | Out-String"
+        ),
+    }
+
+
+def system_info_cmd_commands() -> Dict[str, str]:
+    """Last-resort cmd.exe telemetry, used only when PowerShell is absent.
+
+    ``wmic`` is deprecated and missing from the newest Windows builds, so this
+    path is a fallback rather than the default; ``tasklist`` always works.
+    """
+    return {
+        "disks": "wmic logicaldisk where drivetype=3 get DeviceID,Size,FreeSpace",
+        "memory": "wmic OS get FreePhysicalMemory,TotalVisibleMemorySize",
+        "load": "wmic cpu get loadpercentage",
+        "top_processes": "tasklist /fo table /nh",
+    }
+
+
+def largest_wallpaper_image(path: str) -> str:
+    """Resolve a wallpaper path that may be a package directory.
+
+    KDE wallpaper packages hold one image per resolution and format (png, jpg,
+    webp, avif); Plasma shows the largest one, so that is what is reported.
+    """
+    if not path or not os.path.isdir(path):
+        return path
+    best, best_size = "", 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".avif")):
+                candidate = os.path.join(root, name)
+                try:
+                    size = os.path.getsize(candidate)
+                except OSError:
+                    continue
+                if size > best_size:
+                    best, best_size = candidate, size
+    return best or path
+
+
+def windows_wallpaper() -> str:
+    """Current wallpaper on Windows, read from the registry with ``winreg``.
+
+    No shell and no extra process: the path lives in
+    ``HKCU\\Control Panel\\Desktop\\WallPaper`` for a single image, while a
+    slideshow leaves that value empty and records the rotation in
+    ``...\\Explorer\\Wallpapers\\BackgroundHistoryPathList``. When the source file
+    is gone the desktop still shows the transcoded copy of it, which is what is
+    reported last.
+    """
+    try:
+        import winreg  # Windows only; import guarded so this module loads anywhere
+    except Exception:
+        return ""
+    path = ""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop") as key:
+            value, _kind = winreg.QueryValueEx(key, "WallPaper")
+            path = str(value or "").strip().strip('"')
+    except Exception:
+        path = ""
+    if not path:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers",
+            ) as key:
+                history, _kind = winreg.QueryValueEx(key, "BackgroundHistoryPathList")
+                for candidate in reversed(list(history or [])):
+                    candidate = str(candidate).strip().strip('"')
+                    if candidate and os.path.isfile(candidate):
+                        path = candidate
+                        break
+        except Exception:
+            pass
+    if not path:
+        transcoded = os.path.join(
+            os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Themes", "TranscodedWallpaper")
+        if os.path.isfile(transcoded):
+            path = transcoded
+    return os.path.expandvars(path) if path else ""
+
+
 def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
     """A one-call summary of the host.
 
@@ -512,12 +689,23 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
     import socket as _socket
     import subprocess as _sp
 
-    def run(cmd: str) -> str:
+    system = platform.system()
+
+    def run_argv(argv: List[str], timeout: float = 8.0) -> str:
         try:
-            out = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
+            out = _sp.run(argv, capture_output=True, text=True, timeout=timeout,
+                          creationflags=_POPEN_FLAGS)
             return (out.stdout or out.stderr).strip()
         except Exception:
             return ""
+
+    def run_shell(cmd: str) -> str:
+        """Run one internal command in the node's own command shell."""
+        return run_argv(command_shell()[1] + [cmd])
+
+    def run_powershell(script: str) -> str:
+        argv = powershell_argv()
+        return run_argv(argv + [script], timeout=12.0) if argv else ""
 
     info: Dict[str, Any] = {
         "hostname": _socket.gethostname(),
@@ -527,53 +715,57 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
         "user": os.environ.get("USER") or os.environ.get("USERNAME") or "",
         "home": os.path.expanduser("~"),
         "cwd": os.getcwd(),
-        "desktop": os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or "",
-        "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
-        "shell": os.environ.get("SHELL", ""),
-        # The shell bash_exec/run_job really use: on a Windows node without Git
-        # Bash this is PowerShell, and commands must be written for it.
+        "shell": os.environ.get("SHELL") or (os.environ.get("COMSPEC") if system == "Windows" else ""),
+        # The shell bash_exec / run_job really use: PowerShell (or cmd.exe) on
+        # Windows, never bash unless the operator asked for it, so the commands
+        # the model writes must match this value.
         "command_shell": command_shell()[0],
-        "disks": run("df -h --output=target,size,used,avail,pcent 2>/dev/null | head -8"),
-        "memory": run("free -h 2>/dev/null | head -3"),
-        "load": run("uptime"),
-        "top_processes": run("ps -eo comm,%mem --sort=-%mem 2>/dev/null | head -6"),
     }
-    # Current wallpaper, the usual first question for a desktop node.
-    # Current wallpaper. KDE keeps the last applied value in the appletsrc as
-    # `Image=<path-or-dir>` (sometimes with a file:// prefix); GNOME uses
-    # gsettings. A directory means a wallpaper package, so resolve the image
-    # inside it the same way Plasma does.
-    wallpaper = ""
-    kde_cfg = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
-    if os.path.isfile(kde_cfg):
+
+    if system == "Windows":
+        # Windows has no XDG_*: report the edition instead, and whether the
+        # session is on the physical console or over RDP (SESSIONNAME is
+        # "Console" or "RDP-Tcp#<n>").
         try:
-            with open(kde_cfg, "r", encoding="utf-8", errors="replace") as handle:
-                for line in handle:
-                    if line.startswith("Image="):
-                        wallpaper = line.strip()[len("Image="):]
+            edition = platform.win32_edition()  # 3.8+, Windows only
         except Exception:
-            wallpaper = ""
-    wallpaper = wallpaper.replace("file://", "")
-    if not wallpaper:
-        gnome = run("gsettings get org.gnome.desktop.background picture-uri 2>/dev/null")
-        if gnome and "file://" in gnome:
-            wallpaper = gnome.split("file://", 1)[1].strip().strip("'\"")
+            edition = ""
+        info["desktop"] = " ".join(
+            part for part in ("Windows", platform.release(), edition) if part)
+        info["session_type"] = (os.environ.get("SESSIONNAME") or "console").strip().lower()
+        if powershell_argv():
+            scripts = system_info_windows_scripts()
+            info.update({name: run_powershell(script) for name, script in scripts.items()})
+        else:
+            # No PowerShell at all: cmd.exe still answers most of it.
+            info.update({name: run_shell(cmd) for name, cmd in system_info_cmd_commands().items()})
+    else:
+        info["desktop"] = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or ""
+        info["session_type"] = os.environ.get("XDG_SESSION_TYPE", "")
+        info.update({name: run_shell(cmd) for name, cmd in system_info_posix_commands().items()})
+    # Current wallpaper, the usual first question for a desktop node.
+    wallpaper = windows_wallpaper() if system == "Windows" else ""
+    if not wallpaper and system != "Windows":
+        # KDE keeps the last applied value in the appletsrc as
+        # `Image=<path-or-dir>` (sometimes with a file:// prefix); GNOME uses
+        # gsettings. A directory means a wallpaper package, so resolve the image
+        # inside it the same way Plasma does.
+        kde_cfg = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
+        if os.path.isfile(kde_cfg):
+            try:
+                with open(kde_cfg, "r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        if line.startswith("Image="):
+                            wallpaper = line.strip()[len("Image="):]
+            except Exception:
+                wallpaper = ""
+        wallpaper = wallpaper.replace("file://", "")
+        if not wallpaper:
+            gnome = run_shell("gsettings get org.gnome.desktop.background picture-uri 2>/dev/null")
+            if gnome and "file://" in gnome:
+                wallpaper = gnome.split("file://", 1)[1].strip().strip("'\"")
     if wallpaper:
-        if os.path.isdir(wallpaper):
-            # A wallpaper package holds many resolutions and formats (png, jpg,
-            # webp, avif); pick the largest image inside it.
-            best, best_size = "", 0
-            for root, _dirs, files in os.walk(wallpaper):
-                for name in files:
-                    if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".avif")):
-                        path = os.path.join(root, name)
-                        try:
-                            size = os.path.getsize(path)
-                        except OSError:
-                            continue
-                        if size > best_size:
-                            best, best_size = path, size
-            wallpaper = best or wallpaper
+        wallpaper = largest_wallpaper_image(wallpaper)
         info["wallpaper"] = wallpaper
         info["wallpaper_exists"] = os.path.isfile(wallpaper)
     return info
@@ -1585,7 +1777,10 @@ TOOLS: List[Dict[str, Any]] = [
         "name": "bash_exec",
         "title": "Execute Bash Command",
         "description": (
-            "Execute a shell command on the local host. Output is paginated: when the result is "
+            "Execute a shell command on the local host. The shell matches the host, not this "
+            "tool's name: run system_info and read command_shell first (bash on Linux/macOS, "
+            "PowerShell or cmd.exe on Windows) and write the command for that shell. "
+            "Output is paginated: when the result is "
             "cut, call again with cursor=next_cursor to continue (nothing is dropped). Large "
             "outputs (>256 KB) are spooled to a file returned in saved_to."
         ),
