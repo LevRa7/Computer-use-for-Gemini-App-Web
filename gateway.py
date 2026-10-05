@@ -787,6 +787,8 @@ async def messages_endpoint(request: Request):
                     "name": "bash_exec",
                     "description": (
                         f"Execute a shell command directly on {user}'s host machine. "
+                        "The shell follows the host: bash on Linux/macOS, PowerShell or cmd.exe "
+                        "on Windows - call system_info first and match command_shell. "
                         "MANDATORY: Always use this tool to inspect git status, run builds, check processes, or execute tasks. "
                         "NEVER guess command outputs."
                     ),
@@ -968,8 +970,11 @@ async def messages_endpoint(request: Request):
                 content_text = f"[Error] {err}"
             else:
                 parts = []
+                # command_shell tells the model which shell bash_exec really uses
+                # (PowerShell or cmd.exe on Windows, bash on Linux), so it writes
+                # commands for the right one instead of assuming bash.
                 for key in ("hostname", "os", "kernel", "user", "home", "desktop",
-                            "session_type", "wallpaper", "wallpaper_exists"):
+                            "session_type", "command_shell", "wallpaper", "wallpaper_exists"):
                     value = res.get(key)
                     if value not in (None, ""):
                         parts.append("%s: %s" % (key, value))
