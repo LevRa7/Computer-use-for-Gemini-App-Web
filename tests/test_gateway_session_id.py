@@ -98,3 +98,32 @@ def test_client_supplied_session_id_is_echoed(tmp_path, monkeypatch):
     )
     response = asyncio.run(gateway.messages_endpoint(request))
     assert response.headers["mcp-session-id"] == "client-held-id"
+
+
+def test_header_less_request_gets_the_latest_issued_session(tmp_path, monkeypatch):
+    """A GET stream without the header must not be told the bare user name.
+
+    Otherwise the client sees one session id on its POSTs and another on its
+    stream and believes it holds two sessions - the original churn bug.
+    """
+    _registry(tmp_path, monkeypatch)
+    gateway.active_sessions.clear()
+    gateway.latest_session_by_user.clear()
+    issued = gateway.issue_session_id("node-one")
+
+    request = _post_request("?user=node-one&token=tok",
+                            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    response = asyncio.run(gateway.messages_endpoint(request))
+    assert response.headers["mcp-session-id"] == issued
+
+
+def test_streamable_http_stream_announces_no_legacy_endpoint():
+    """GET /mcp is a Streamable HTTP stream: JSON-RPC frames only.
+
+    The classic `event: endpoint` frame points at /messages, which is not part of
+    that protocol; a strict client drops the stream over it - and that stream is
+    where it reads tool results from.
+    """
+    assert gateway.announce_endpoint_for_path("/mcp") is False
+    assert gateway.announce_endpoint_for_path("/sse") is True
+    assert gateway.announce_endpoint_for_path("/messages") is True
