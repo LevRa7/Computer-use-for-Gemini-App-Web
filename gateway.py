@@ -28,6 +28,7 @@ REGISTRY_PATH = "/etc/antigravity-mesh/registry.json"
 active_tunnels = {}  # user -> {"ws": WebSocket, "pending": {req_id: Future}}
 active_sse_subscribers = {}  # user -> set of asyncio.Queue
 active_sse_sessions = {}  # session_id -> asyncio.Queue
+active_sessions = {}  # session_id -> user, issued once per initialize
 
 # Negotiated protocol version per user. The value must be identical in the
 # initialize result AND in the mcp-protocol-version header of every response: a
@@ -74,6 +75,24 @@ LEGACY_SUBDOMAIN_ACCESS = os.environ.get("MESH_LEGACY_SUBDOMAIN", "1").strip().l
 def public_url(path: str, user: str, token: str) -> str:
     """Canonical public URL for one node on the shared domain."""
     return f"{PUBLIC_BASE_URL}{path}?user={user}&token={token}"
+
+
+def issue_session_id(user: str) -> str:
+    """Issue a unique ``Mcp-Session-Id`` for one initialize.
+
+    The spec requires a session id to be unique per session, and Google's
+    frontends open several parallel connections per turn (a POST for the call,
+    a GET for the stream, a DELETE to tear the session down, often from
+    different egress IPs). Returning the user name as the session id -- as this
+    gateway used to -- gave every one of those connections the same identity, so
+    a DELETE sent by one of them looked like it had terminated the session that
+    another connection's in-flight tool call belonged to, and the client dropped
+    the answer it had already received. Clients that never echo the header keep
+    working: they still fall back to the user name.
+    """
+    session_id = uuid.uuid4().hex
+    active_sessions[session_id] = user
+    return session_id
 
 
 def protocol_version_for(user: str) -> str:
@@ -590,6 +609,7 @@ async def messages_endpoint(request: Request):
                 + (f", proto-hdr={proto_hdr[:20]!r}" if proto_hdr else ""))
 
     resp = {"jsonrpc": "2.0", "id": req_id}
+    issued_session_id = ""  # set by initialize; echoed in the response header below
 
     if method == "initialize":
         # Protocol version negotiation. The spec says a client MUST disconnect
@@ -610,8 +630,11 @@ async def messages_endpoint(request: Request):
         else:
             negotiated = "2024-11-05"
         active_protocol_versions[user] = negotiated
+        session_id = issue_session_id(user)
+        issued_session_id = session_id
         logger.info(f"initialize: client requested protocolVersion={client_version!r} "
-                    f"clientInfo={(params or {}).get('clientInfo')} -> answering {negotiated}")
+                    f"clientInfo={(params or {}).get('clientInfo')} -> answering {negotiated}; "
+                    f"issued session {session_id[:12]}… for user '{user}'")
         resp["result"] = {
             "protocolVersion": negotiated,
             "capabilities": {
@@ -634,7 +657,11 @@ async def messages_endpoint(request: Request):
                 f"USE: list_dir/glob_find/grep_search to locate, read_file to read, write_file/edit_file to "
                 f"modify, bash_exec for short commands, system_vitals for resources. Only touch paths you "
                 f"have confirmed. For slow work (builds, installs, tests, downloads) use run_job, then "
-                f"job_output / job_kill / job_list. Long output is paged: pass cursor=<next_cursor>."
+                f"job_output / job_kill / job_list. Long output is paged: pass cursor=<next_cursor>.\n"
+                f"REACHABILITY: every tool result you receive in this conversation was produced ON the "
+                f"node, so the node IS online. After any successful tool result, never tell the user the "
+                f"host is unreachable or that the agent did not answer. If a call fails, report its exact "
+                f"error text instead of guessing that the host is down."
             )
             )
             )
@@ -1129,7 +1156,9 @@ async def messages_endpoint(request: Request):
     # A client that asks ONLY for text/event-stream must get an SSE-framed body:
     # a strict streamable-HTTP client rejects application/json even when the
     # payload itself is correct.
-    session_id = request.headers.get("mcp-session-id") or user
+    # The id we issued at initialize must be the one the client sees here, or the
+    # client believes it holds a different session than the one it opened.
+    session_id = request.headers.get("mcp-session-id") or issued_session_id or user
     headers = {
         "mcp-session-id": session_id,
         "mcp-protocol-version": protocol_version_for(user),
@@ -1184,7 +1213,12 @@ async def mcp_unified_endpoint(request: Request):
             )
         client_ip = request.client.host if request.client else "unknown"
         session_id = request.headers.get("mcp-session-id") or user
-        logger.info(f"Session teardown (DELETE) from {client_ip} [{user}] session_id={session_id}")
+        logger.info(f"Session teardown (DELETE) from {client_ip} [{user}] session_id={session_id[:12]}…")
+
+        # Forget the session we issued for this connection. Streams live under
+        # their own per-connection key, so a teardown can never close a stream
+        # that another in-flight request is still reading.
+        active_sessions.pop(session_id, None)
 
         # Clean up session queue if active
         if session_id in active_sse_sessions:
