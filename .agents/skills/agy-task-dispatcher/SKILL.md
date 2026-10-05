@@ -17,19 +17,29 @@ description: Orchestrates distributed Linux hosts and compute nodes using Native
 
 ---
 
-## 🛠️ 2. Матрица управления узлами через MCP API
+## 🛠️ 2. Реальные инструменты этого MCP (сверено с `tools/list`)
 
-| Инструмент MCP | Назначение и тип узла | Типовой вызов |
-| :--- | :--- | :--- |
-| **`bash_exec(command)`** | Хост-координатор / Локальный узел | `bash_exec("uptime -p && free -m")` |
-| **`<node>_exec(command)`** | Удалённый узел (согласно списку `tools/list`) | `<node>_exec("uptime")` |
-| **`system_vitals()`** | Мгновенная телеметрия хоста | `system_vitals()` |
-| **`<node>_vitals()`** | Телеметрия подключенного устройства (батарея, память) | `<node>_vitals()` |
-| **`read_file(path, start, end)`** | Чтение строк любого файла на сервере | `read_file(path="...", start_line=1, end_line=50)` |
-| **`write_file(path, content)`** | Запись / создание файла на сервере | `write_file(path="...", content="...")` |
-| **`gdrive_copy(file, dest, node)`** | Доставка файлов между Google Диском и узлом | `gdrive_copy(file_name_or_id="doc.md", dest_path="~/dir/doc.md", target_node="local")` |
+> ⚠️ **В этом MCP НЕТ инструментов `<node>_exec`, `matebook_exec`, `debian_exec`,
+> `racknerd2_exec`, `<node>_vitals` и `gdrive_copy`.** Они остались только в legacy-сервере
+> `agy_mcp_server.py`, который нигде не запущен. Вызов такого имени возвращает
+> `{"code":-32601,"message":"Unknown tool: ..."}`, и клиент показывает это как
+> «не удалось получить ответ от хоста». Используйте только имена из таблицы ниже.
 
-> ⚡ **Скорость отклика:** 100–200 мс напрямую через подключенный MCP-сервер без промежуточных очередей.
+| Инструмент | Назначение |
+| :--- | :--- |
+| `bash_exec(command)` | Команды на узле, к которому подключён MCP (короткие, ≤25 с) |
+| `list_dir(path)` | Содержимое каталога |
+| `read_file(path, start_line, end_line)` | Чтение файла построчно |
+| `write_file(path, content)` / `edit_file(path, old_string, new_string)` | Запись / точечная правка |
+| `grep_search(pattern, path)` / `glob_find(pattern, path)` | Поиск по содержимому / по именам файлов |
+| `system_vitals()` | CPU, RAM, диск |
+| `system_info()` | Сводка по хосту одним вызовом |
+| `mesh_status()` | Подтверждение, что узел на связи (вызывать, если кажется, что хост офлайн) |
+| `run_job(command)` → `job_output(job_id)` / `job_kill` / `job_list` | Долгие команды в фоне |
+| `get_orchestration_skill()` | Актуальный текст этого скилла |
+
+> ⚡ **Таймауты:** команда дольше ~25 с обрывается шлюзом. Всё долгое (сборки, установки, тесты,
+> скачивания) запускать через `run_job` и забирать результат через `job_output`.
 
 ---
 
