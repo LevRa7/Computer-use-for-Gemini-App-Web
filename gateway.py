@@ -787,8 +787,10 @@ async def messages_endpoint(request: Request):
                 },
                 {
                     "name": "job_list",
-                    "description": "List recent jobs, newest first.",
-                    "inputSchema": {"type": "object", "properties": {}, "required": []}
+                    "description": "List recent jobs, newest first (20 by default).",
+                    "inputSchema": {"type": "object", "properties": {
+                        "limit": {"type": "integer", "description": "How many jobs to return (1-50, default 20)"}
+                    }, "required": []}
                 }
             ]
         }
@@ -1090,11 +1092,16 @@ async def messages_endpoint(request: Request):
         headers["Cache-Control"] = "no-cache"
         return Response(payload, media_type="text/event-stream", headers=headers)
 
-    if LEGACY_SSE and "text/event-stream" in accept_hdr and active_sse_subscribers.get(user):
+    if (LEGACY_SSE and method != "initialize"
+            and "text/event-stream" in accept_hdr and active_sse_subscribers.get(user)):
         # The client is holding a stream and reads the answer there, so a body
         # would be a second copy of the same response. 202 Accepted with no body
         # is what the legacy SSE transport prescribes; the broadcast above has
         # already queued the message on the stream.
+        #
+        # `initialize` is deliberately excluded: with it answered 202 the client
+        # never learns the session id or the negotiated version, and the observed
+        # result was a pure initialise/DELETE loop with no tool call at all.
         logger.info(f"legacy-SSE mode: answering {method} with 202, result goes to the stream")
         return Response(status_code=202, headers=headers)
 
