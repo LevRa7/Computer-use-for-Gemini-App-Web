@@ -35,6 +35,12 @@ active_sse_sessions = {}  # session_id -> asyncio.Queue
 active_protocol_versions = {}
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 
+# Legacy SSE transport experiment. The classic MCP SSE transport answers a POST
+# with 202 Accepted and an EMPTY body, and delivers the result only on the stream.
+# Set MESH_LEGACY_SSE=1 to switch a client that holds an open stream onto that
+# contract; leave it unset for the current "answer in the body too" behaviour.
+LEGACY_SSE = os.environ.get("MESH_LEGACY_SSE", "").strip() in ("1", "true", "yes")
+
 
 def protocol_version_for(user: str) -> str:
     return active_protocol_versions.get(user, DEFAULT_PROTOCOL_VERSION)
@@ -515,6 +521,8 @@ async def messages_endpoint(request: Request):
     # streamable-HTTP client that asks only for text/event-stream rejects a plain
     # application/json body even when the payload is correct.
     accept_hdr = (request.headers.get("accept") or "").lower()
+    incoming_session = request.headers.get("mcp-session-id") or ""
+    proto_hdr = request.headers.get("mcp-protocol-version") or ""
     tool_note = ""
     if method == "tools/call":
         # Log which tool the client asked for: without it a retry loop in the
@@ -527,7 +535,9 @@ async def messages_endpoint(request: Request):
         except Exception:
             tool_note = ", tool=?"
     logger.info(f"Incoming MCP RPC from {client_ip} [{user}]: method={method}, id={req_id}{tool_note}"
-                + (f", accept={accept_hdr[:60]!r}" if accept_hdr else ""))
+                + (f", accept={accept_hdr[:60]!r}" if accept_hdr else "")
+                + (f", session={incoming_session[:40]!r}" if incoming_session else ", session=<none>")
+                + (f", proto-hdr={proto_hdr[:20]!r}" if proto_hdr else ""))
 
     resp = {"jsonrpc": "2.0", "id": req_id}
 
@@ -1079,6 +1089,15 @@ async def messages_endpoint(request: Request):
         payload = "event: message\ndata: %s\n\n" % json.dumps(resp, ensure_ascii=False)
         headers["Cache-Control"] = "no-cache"
         return Response(payload, media_type="text/event-stream", headers=headers)
+
+    if LEGACY_SSE and "text/event-stream" in accept_hdr and active_sse_subscribers.get(user):
+        # The client is holding a stream and reads the answer there, so a body
+        # would be a second copy of the same response. 202 Accepted with no body
+        # is what the legacy SSE transport prescribes; the broadcast above has
+        # already queued the message on the stream.
+        logger.info(f"legacy-SSE mode: answering {method} with 202, result goes to the stream")
+        return Response(status_code=202, headers=headers)
+
     return JSONResponse(resp, headers=headers)
 
 async def mcp_unified_endpoint(request: Request):
