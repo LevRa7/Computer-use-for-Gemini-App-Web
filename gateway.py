@@ -976,13 +976,12 @@ async def messages_endpoint(request: Request):
     else:
         resp["error"] = {"code": -32601, "message": f"Method not found: {method}"}
 
-    # Deliver the answer on the SSE stream only for the legacy endpoint that the
-    # `event: endpoint` announcement points at (/messages). Clients that POST to
-    # /sse or /mcp read the response from this HTTP body; broadcasting it as well
-    # would hand them every answer twice, and a strict client reacts to the
-    # unexpected message by aborting the session and starting over.
-    if request.url.path.rstrip("/") == "/messages":
-        broadcast_sse(user, resp)
+    # The response is delivered BOTH ways on purpose, because clients differ:
+    # some read the HTTP body (streamable HTTP) and some read the SSE stream
+    # (legacy SSE transport). Gemini Spark opens GET /sse and then POSTs to /sse,
+    # and it takes the result from the stream - removing this broadcast made the
+    # command run on the host while the model never received the answer.
+    broadcast_sse(user, resp)
 
     # Return response in HTTP body (for Streamable HTTP clients) with Mcp-Session-Id header
     session_id = request.headers.get("mcp-session-id") or user
