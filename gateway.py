@@ -44,6 +44,17 @@ DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 # contract; leave it unset for the current "answer in the body too" behaviour.
 LEGACY_SSE = os.environ.get("MESH_LEGACY_SSE", "").strip() in ("1", "true", "yes")
 
+# Answering a POST in the HTTP body AND on the caller's SSE stream hands a strict
+# streamable-HTTP client the SAME response id twice, and it rejects the session.
+# The body alone is what /sse and /mcp clients read - the `initialize` response,
+# which is answered before any stream exists, is proof that they do. Only the
+# legacy /messages transport needs the stream, and LEGACY_SSE (202, no body)
+# deliberately needs it too.
+# Set MESH_BROADCAST_HTTP_RESPONSES=1 to duplicate on purpose while debugging.
+BROADCAST_HTTP_RESPONSES = os.environ.get(
+    "MESH_BROADCAST_HTTP_RESPONSES", "0"
+).strip().lower() in ("1", "true", "yes", "on")
+
 # ---------------------------------------------------------------------------
 # ONE SHARED DOMAIN FOR EVERY NODE (canonical URL contract)
 # ---------------------------------------------------------------------------
@@ -105,6 +116,16 @@ def announce_endpoint_for_path(path: str) -> bool:
     there - a strict client otherwise drops the stream it reads results from.
     """
     return path != "/mcp"
+
+
+def should_broadcast_response(path: str) -> bool:
+    """Whether a POST response is also queued on the caller's SSE stream.
+
+    Duplicating the answer (body + stream) hands a strict streamable-HTTP client
+    the same response id twice; it rejects the session and the model never sees
+    the result. Only the legacy transports need the stream.
+    """
+    return path == "/messages" or LEGACY_SSE or BROADCAST_HTTP_RESPONSES
 
 
 def resolve_session_id(request: Request, user: str) -> str:
@@ -1196,12 +1217,16 @@ async def messages_endpoint(request: Request):
     else:
         resp["error"] = {"code": -32601, "message": f"Method not found: {method}"}
 
-    # The response is delivered BOTH ways on purpose, because clients differ:
-    # some read the HTTP body (streamable HTTP) and some read the SSE stream
-    # (legacy SSE transport). Gemini Spark opens GET /sse and then POSTs to /sse,
-    # and it takes the result from the stream - removing this broadcast made the
-    # command run on the host while the model never received the answer.
-    broadcast_sse(user, resp)
+    # Delivery channel. The answer always goes in the HTTP body; duplicating it on
+    # the caller's stream is what makes a strict client see one response id twice
+    # and drop the session. Only the legacy transports (POST /messages, or
+    # LEGACY_SSE which answers 202 with no body) are delivered on the stream.
+    path = request.url.path
+    if should_broadcast_response(path):
+        broadcast_sse(user, resp)
+    else:
+        logger.info(f"response [{method} id={req_id}] answered in the POST body only "
+                    f"(no stream duplicate)")
 
     if method == "tools/call":
         # Duration matters: Gemini's frontend gives a tool call roughly 30 s, so a
