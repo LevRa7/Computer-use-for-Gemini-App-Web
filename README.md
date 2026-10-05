@@ -70,12 +70,37 @@ cd Computer-use-for-Gemini-App-Web
 2. Click **Add App** (or go to **Settings ⚙️ ➔ Tools / Extensions (MCP)**).
 3. The MCP SSE URL is **automatically copied to your clipboard** during install — just paste it (**Ctrl+V**):
    ```text
-   https://<your-device-name>.smart-server.online/sse?token=<your_secret_token>
+   https://smart-server.online/sse?user=<your-node-name>&token=<your_secret_token>
    ```
+   Every node uses the **same shared domain** and is selected by `?user=` — there are no per-device subdomains to configure, and nothing extra to add to the TLS certificate.
 4. Done! You can now prompt Gemini:
    - *"Check system resources using system_vitals"*
    - *"Create a FastAPI application and run test coverage via bash_exec"*
    - *"Git commit and push changes"*
+
+### One shared domain (canonical URL contract)
+
+A node is **never** addressed by its own hostname. The gateway publishes a single
+shared domain and the node name travels as a query parameter:
+
+| Purpose | Canonical URL |
+| :--- | :--- |
+| MCP over SSE | `https://<shared-domain>/sse?user=<node-name>&token=<token>` |
+| MCP Streamable HTTP | `https://<shared-domain>/mcp?user=<node-name>&token=<token>` |
+| Reverse tunnel (agent) | `wss://<shared-domain>/ws/tunnel?user=<node-name>&token=<token>` |
+
+Why: every extra hostname would need its own DNS record *and* its own SAN in the
+TLS certificate. A node whose name is missing from the certificate fails the TLS
+handshake, and the Gemini client then reports an opaque "cannot connect to host".
+With one shared domain the certificate covers every node forever, and adding a
+node is only a registration call.
+
+- The shared domain defaults to `smart-server.online`; override it with
+  `./install.sh --domain=<shared-domain>` (node side) or `MESH_PUBLIC_URL`
+  (gateway side).
+- Legacy per-device subdomain URLs still resolve for backwards compatibility and
+  log a deprecation warning; set `MESH_LEGACY_SUBDOMAIN=0` on the gateway to
+  reject them outright.
 
 ---
 
@@ -185,9 +210,33 @@ cd Computer-use-for-Gemini-App-Web
 2. Нажмите **Добавить приложение** (Add App / Настройки ➔ MCP).
 3. Ссылка на ваш MCP-сервер **автоматически скопирована в буфер обмена** при установке — просто вставьте её (**Ctrl+V**):
    ```text
-   https://<имя-вашего-пк>.smart-server.online/sse?token=<ваш_секретный_токен>
+   https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ваш_секретный_токен>
    ```
+   Все узлы используют **один общий домен**, а нужный узел выбирается параметром `?user=` — субдомены для каждого устройства не создаются, и добавлять что-либо в TLS-сертификат не нужно.
 4. Готово! Теперь Gemini может выполнять команды прямо на вашей машине.
+
+### Один общий домен (канонический формат URL)
+
+Узел **никогда** не адресуется собственным именем хоста. Шлюз публикует один
+общий домен, а имя узла передаётся параметром:
+
+| Назначение | Канонический URL |
+| :--- | :--- |
+| MCP через SSE | `https://<общий-домен>/sse?user=<имя-узла>&token=<токен>` |
+| MCP Streamable HTTP | `https://<общий-домен>/mcp?user=<имя-узла>&token=<токен>` |
+| Обратный туннель (агент) | `wss://<общий-домен>/ws/tunnel?user=<имя-узла>&token=<токен>` |
+
+Почему так: каждому дополнительному имени хоста нужна своя DNS-запись **и** свой
+SAN в TLS-сертификате. Если имени нет в сертификате, TLS-рукопожатие падает, и
+клиент Gemini показывает невнятную ошибку «не удаётся подключиться к хосту».
+С одним общим доменом сертификат покрывает все узлы сразу, а добавление узла —
+это только вызов регистрации.
+
+- Общий домен по умолчанию `smart-server.online`; переопределяется через
+  `./install.sh --domain=<общий-домен>` (на стороне узла) или `MESH_PUBLIC_URL`
+  (на стороне шлюза).
+- Старые ссылки с субдоменами устройства продолжают работать для совместимости
+  и пишут предупреждение в лог; `MESH_LEGACY_SUBDOMAIN=0` на шлюзе отключает их.
 
 ---
 

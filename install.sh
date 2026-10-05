@@ -140,7 +140,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --domain=*)
+            # The shared public domain that serves every node. This is NOT a
+            # per-device subdomain: nodes are selected with ?user=<node>.
             DOMAIN="${1#*=}"
+            GATEWAY="$DOMAIN"
             shift
             ;;
         --dry-run)
@@ -148,7 +151,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: $0 [--lang=en|ru] [-q|--quick] [--mode=tunnel|standalone|gateway] [--user=<subdomain>] [--token=<token>] [--port=<port>] [--ssh=user@host] [--dry-run]"
+            echo "Usage: $0 [--lang=en|ru] [-q|--quick] [--mode=tunnel|standalone|gateway] [--user=<node-name>] [--token=<token>] [--domain=<shared-domain>] [--port=<port>] [--ssh=user@host] [--dry-run]"
+            echo ""
+            echo "All nodes use ONE shared domain; the node is selected by ?user=<node-name>:"
+            echo "  MCP URL: https://<shared-domain>/sse?user=<node-name>&token=<token>"
             exit 0
             ;;
         *)
@@ -157,6 +163,20 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ------------------------------------------------------------------------------
+#  SHARED-DOMAIN CONTRACT (canonical step)
+#  Every node is reached through ONE public domain ($GATEWAY); the node is
+#  selected by the ?user= query parameter. The installer never mints a
+#  per-device subdomain: each extra hostname would need its own DNS record and
+#  TLS SAN, and a name missing from the certificate fails the handshake with an
+#  opaque "cannot connect to host" error in the Gemini client.
+#     sse    https://<shared-domain>/sse?user=<node-name>&token=<token>
+#     http   https://<shared-domain>/mcp?user=<node-name>&token=<token>
+#     tunnel wss://<shared-domain>/ws/tunnel?user=<node-name>&token=<token>
+#  $GATEWAY is read at call time so the interactive menu can still change it.
+# ------------------------------------------------------------------------------
+node_sse_url() { printf 'https://%s/sse?user=%s&token=%s' "$GATEWAY" "$1" "$2"; }
 
 # Language prompt if interactive and not specified
 if [ -z "$LANG_CHOICE" ]; then
@@ -296,7 +316,10 @@ if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] Port: $PORT"
     echo "[DRY-RUN] TLS: $TLS"
     if [ -n "$DOMAIN" ]; then echo "[DRY-RUN] Domain: $DOMAIN"; fi
-    if [ -n "$USERNAME" ]; then echo "[DRY-RUN] User: $USERNAME"; fi
+    if [ -n "$USERNAME" ]; then
+        echo "[DRY-RUN] User: $USERNAME"
+        echo "[DRY-RUN] Canonical MCP URL: $(node_sse_url "$USERNAME" "${TOKEN:-<token>}")"
+    fi
     if [ -n "$TOKEN" ]; then echo "[DRY-RUN] Token: set (standalone: stored in ${CONFIG_DIR}/standalone.env, chmod 600)"; fi
     echo "[DRY-RUN] Systemd service and dependencies check: OK"
     exit 0
@@ -335,18 +358,18 @@ if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
     echo ""
     if [ "$LANG_CHOICE" = "ru" ]; then
         echo -e "${BOLD}Выберите режим установки:${RESET}"
-        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Быстрая настройка${RESET} (Субдомен как имя ПК + Облачный шлюз + Автозапуск) [Рекомендуется]"
-        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Локальный Standalone${RESET} (Только localhost:${PORT}, без субдомена и шлюза)"
-        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Кастомная настройка${RESET} (Ввести имя субдомена вручную, выбор шлюза)"
+        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Быстрая настройка${RESET} (Имя узла как имя ПК + Общий домен + Автозапуск) [Рекомендуется]"
+        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Локальный Standalone${RESET} (Только localhost:${PORT}, без облачного шлюза)"
+        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Кастомная настройка${RESET} (Ввести имя узла вручную, выбор общего домена)"
         echo -e "  ${CYAN}4)${RESET} 📡 ${BOLD}Удаленная установка на SSH-сервер${RESET}"
         echo -e "  ${RESET}0) Выход"
         echo ""
         read -rp "Ваш выбор [1]: " MENU_CHOICE
     else
         echo -e "${BOLD}Select Installation Mode:${RESET}"
-        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Quick Setup${RESET} (Auto-subdomain from PC name + Cloud Gateway + Autostart) [Recommended]"
-        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Local Standalone${RESET} (localhost:${PORT} only, no subdomain, no cloud gateway)"
-        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Custom Setup${RESET} (Custom subdomain name, custom gateway/port)"
+        echo -e "  ${GREEN}1)${RESET} ⚡ ${BOLD}Quick Setup${RESET} (Node name from PC name + shared domain + Autostart) [Recommended]"
+        echo -e "  ${BLUE}2)${RESET} 🖥️  ${BOLD}Local Standalone${RESET} (localhost:${PORT} only, no cloud gateway)"
+        echo -e "  ${YELLOW}3)${RESET} ⚙️  ${BOLD}Custom Setup${RESET} (Custom node name, custom shared domain)"
         echo -e "  ${CYAN}4)${RESET} 📡 ${BOLD}Remote SSH Installation${RESET}"
         echo -e "  ${RESET}0) Exit"
         echo ""
@@ -366,11 +389,11 @@ if [ "$QUICK" = false ] && [ -z "$MODE" ] && [ -t 0 ]; then
             MODE="tunnel"
             echo ""
             if [ "$LANG_CHOICE" = "ru" ]; then
-                read -rp "Введите имя субдомена [по умолчанию: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
-                read -rp "Хост шлюза [по умолчанию: ${GATEWAY}]: " CUSTOM_GW
+                read -rp "Введите имя узла [по умолчанию: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
+                read -rp "Общий домен шлюза [по умолчанию: ${GATEWAY}]: " CUSTOM_GW
             else
-                read -rp "Enter subdomain name [default: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
-                read -rp "Gateway host [default: ${GATEWAY}]: " CUSTOM_GW
+                read -rp "Enter node name [default: ${DETECTED_HOSTNAME}]: " CUSTOM_SUB
+                read -rp "Shared gateway domain [default: ${GATEWAY}]: " CUSTOM_GW
             fi
             if [ -n "$CUSTOM_SUB" ]; then USERNAME="$CUSTOM_SUB"; fi
             if [ -n "$CUSTOM_GW" ]; then GATEWAY="$CUSTOM_GW"; fi
@@ -607,9 +630,9 @@ fi
 #  BRANCH: CLOUD GATEWAY + REVERSE TUNNEL
 # ==============================================================================
 if [ "$LANG_CHOICE" = "ru" ]; then
-    echo -e "\n${BOLD}${MAGENTA}=== Настройка облачного туннеля и субдомена ===${RESET}"
+    echo -e "\n${BOLD}${MAGENTA}=== Настройка облачного туннеля (общий домен) ===${RESET}"
 else
-    echo -e "\n${BOLD}${MAGENTA}=== Configuring Cloud Gateway Tunnel & Subdomain ===${RESET}"
+    echo -e "\n${BOLD}${MAGENTA}=== Configuring Cloud Gateway Tunnel (shared domain) ===${RESET}"
 fi
 
 if [ -z "$USERNAME" ]; then
@@ -630,9 +653,9 @@ fi
 ensure_dependencies
 
 if [ "$LANG_CHOICE" = "ru" ]; then
-    echo "[2/4] Регистрация субдомена '${USERNAME}' на шлюзе (${GATEWAY})..."
+    echo "[2/4] Регистрация узла '${USERNAME}' на общем домене (${GATEWAY})..."
 else
-    echo "[2/4] Registering subdomain '${USERNAME}' on Gateway (${GATEWAY})..."
+    echo "[2/4] Registering node '${USERNAME}' on the shared domain (${GATEWAY})..."
 fi
 
 EXISTING_TOKEN=""
@@ -697,9 +720,9 @@ fi
 
 if [ "$ASSIGNED_USER" != "$USERNAME" ]; then
     if [ "$LANG_CHOICE" = "ru" ]; then
-        echo -e "${YELLOW}ℹ️  Имя '${USERNAME}' уже было занято. Автоматически назначен субдомен:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
+        echo -e "${YELLOW}ℹ️  Имя '${USERNAME}' уже было занято. Автоматически назначено имя узла:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
     else
-        echo -e "${YELLOW}ℹ️  Name '${USERNAME}' was already taken. Automatically assigned subdomain:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
+        echo -e "${YELLOW}ℹ️  Name '${USERNAME}' was already taken. Automatically assigned node name:${RESET} ${BOLD}${GREEN}${ASSIGNED_USER}${RESET}"
     fi
 fi
 
@@ -788,7 +811,8 @@ fi
 
 sleep 1
 
-MCP_URL="https://${GATEWAY}/sse?user=${ASSIGNED_USER}&token=${ASSIGNED_TOKEN}"
+# Canonical shared-domain MCP URL (one domain for every node; ?user= selects it).
+MCP_URL="$(node_sse_url "$ASSIGNED_USER" "$ASSIGNED_TOKEN")"
 
 # Quick Copy to Clipboard
 COPIED=false

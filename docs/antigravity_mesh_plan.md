@@ -60,7 +60,7 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 
 ## 🛠️ 4. Нативные инструменты MCP (Gemini Web Spark)
 
-В Gemini подключено приложение **Antigravity Mesh** (`https://<your-domain>/sse`):
+В Gemini подключено приложение **Antigravity Mesh** (`https://<shared-domain>/sse?user=<node-name>&token=<token>` — один общий домен на все узлы):
 
 * `bash_exec(command)` — моментальное выполнение команд на VPS (`<vps-host>`).
 * `debian_exec(command)` — ресурсоёмкие вычисления, сборки, бенчмарки на узле **AMD Ryzen 9 5950X / 64GB RAM** (`<compute-ip>`).
@@ -83,7 +83,7 @@ description: Multi-device subagent orchestration mesh where Web-Gemini acts as c
 * Токен Google OAuth: `/root/agy-gdrive-runner/token.json`
 * Конфигурация rclone: `/root/.config/rclone/rclone.conf`
 * Логи: `/root/agy-gdrive-runner/mcp_requests.log`, `agy_watcher.log`, `agy_sync.log`
-* Эндпоинты: `https://<your-domain>/sse`, `https://<your-domain>/mcp`
+* Эндпоинты (общий домен, узел выбирается `?user=`): `https://<shared-domain>/sse?user=<node-name>&token=<token>`, `https://<shared-domain>/mcp?user=<node-name>&token=<token>`
 
 ### ⚙️ Выполняемые команды (Commands):
 * VPS: `bash_exec("free -h && uptime -p")`
