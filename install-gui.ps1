@@ -325,6 +325,7 @@ function Test-DomainConfigured {
 
 $script:Headless = $false
 $script:Timer = $null
+$script:ScratchDir = $null
 
 $script:Pipe = @{
     Steps       = @()
@@ -356,6 +357,41 @@ function New-PipelineStep {
     }
 }
 
+# Where the pipeline keeps the child's stdout/stderr and the self-test keeps its
+# probes. %TEMP% is the obvious choice but not always a writable one: on a locked
+# down machine, and inside a sandboxed folder, the write is refused and the child
+# then produces nothing at all - which used to be reported as "no gateway domain
+# configured". Each candidate is probed with a real write before it is used.
+function Get-ScratchDirectory {
+    if ($script:ScratchDir) { return $script:ScratchDir }
+
+    $candidates = New-Object System.Collections.ArrayList
+    if ($env:TEMP) { [void]$candidates.Add($env:TEMP) }
+    [void]$candidates.Add((Join-Path $ScriptDir 'runtime'))
+    if ($env:LOCALAPPDATA) {
+        [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'AntigravityMesh\runtime'))
+    }
+
+    foreach ($candidate in $candidates) {
+        try {
+            if (-not (Test-Path -LiteralPath $candidate)) {
+                [void](New-Item -ItemType Directory -Path $candidate -Force -ErrorAction Stop)
+            }
+            $probe = Join-Path $candidate ('write-probe-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+            Set-Content -LiteralPath $probe -Value '' -Encoding ASCII -ErrorAction Stop
+            Remove-Item -LiteralPath $probe -Force -ErrorAction Stop
+            $script:ScratchDir = $candidate
+            return $candidate
+        } catch {
+            continue
+        }
+    }
+
+    # Nothing worked; return the first choice so the failure names a real path.
+    $script:ScratchDir = $candidates[0]
+    return $script:ScratchDir
+}
+
 function Reset-Pipeline {
     param(
         [object[]]$Steps,
@@ -375,8 +411,9 @@ function Reset-Pipeline {
     $script:Pipe.Proc = $null
 
     $stamp = [Guid]::NewGuid().ToString('N')
-    $script:Pipe.OutFile = Join-Path $env:TEMP ('mesh-gui-out-' + $stamp + '.log')
-    $script:Pipe.ErrFile = Join-Path $env:TEMP ('mesh-gui-err-' + $stamp + '.log')
+    $scratch = Get-ScratchDirectory
+    $script:Pipe.OutFile = Join-Path $scratch ('mesh-gui-out-' + $stamp + '.log')
+    $script:Pipe.ErrFile = Join-Path $scratch ('mesh-gui-err-' + $stamp + '.log')
     try {
         Set-Content -LiteralPath $script:Pipe.OutFile -Value '' -Encoding ASCII
         Set-Content -LiteralPath $script:Pipe.ErrFile -Value '' -Encoding ASCII
@@ -697,7 +734,7 @@ $script:Token = ''
 $script:SshTarget = ''
 $script:SshPort = 22
 
-$script:Preflight = @{ Running = $false; Done = $false; Text = ''; Facts = $null; Problems = $false }
+$script:Preflight = @{ Running = $false; Done = $false; Text = ''; Facts = $null; Problems = $false; Parsed = $false }
 $script:Install = @{ Running = $false; Failed = $false; Exit = 0; Output = ''; Url = ''; Notice = ''; LinkNotice = '' }
 $script:OptionError = ''
 
@@ -790,7 +827,9 @@ function Build-WelcomePage {
     $preflight.Controls.Add($box)
     $script:Content.Controls.Add($preflight)
 
-    if ($script:Preflight.Done -and $script:Preflight.Facts) {
+    # Gated on Parsed: when the preflight could not run, the report above already
+    # says so, and an extra "no domain configured" would be a wrong diagnosis.
+    if ($script:Preflight.Done -and $script:Preflight.Parsed) {
         if (-not (Test-DomainConfigured -Value $script:Preflight.Facts.Domain)) {
             $hint = New-Label -Text (Get-UiText -Key 'preflight_no_domain') -X 20 -Y 466 -W 752 -H 34
             $hint.ForeColor = [System.Drawing.Color]::FromArgb(176, 96, 0)
@@ -1231,6 +1270,10 @@ function Start-Preflight {
         $script:Preflight.Done = $true
         $facts = Get-PreflightFacts -Text $output
         $script:Preflight.Facts = $facts
+        # Whether the check actually produced anything. A run that could not even
+        # write its output files parses to nothing, and that is not the same thing
+        # as "no domain configured".
+        $script:Preflight.Parsed = [bool]($facts.Python -or $facts.Domain)
         # exit 2 is install.ps1's "preflight found problems" code, not a failure
         # of the check itself, so the report is still worth showing.
         $script:Preflight.Problems = ($exitCode -eq 2)
@@ -1442,7 +1485,7 @@ function Invoke-SelfTest {
     Add-SelfTestResult 'keys_resolve' ($unresolved.Count -eq 0) ("unresolved=[" + ($unresolved -join ',') + "]")
 
     # 4. the tolerant reader decodes UTF-8 Russian rather than mangling it
-    $probe = Join-Path $env:TEMP ('mesh-gui-selftest-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $probe = Join-Path (Get-ScratchDirectory) ('mesh-gui-selftest-' + [Guid]::NewGuid().ToString('N') + '.txt')
     $cyrillic = [string][char]0x041F + [char]0x0440 + [char]0x0438 + [char]0x0432 + [char]0x0435 + [char]0x0442
     try {
         [System.IO.File]::WriteAllText($probe, $cyrillic, (New-Object System.Text.UTF8Encoding($false)))
@@ -1471,7 +1514,7 @@ function Invoke-SelfTest {
         ("parsed='" + $parsedStandalone + "'")
 
     # 6. the agent.env fallback rebuilds the canonical URL
-    $envProbe = Join-Path $env:TEMP ('mesh-gui-selftest-env-' + [Guid]::NewGuid().ToString('N') + '.env')
+    $envProbe = Join-Path (Get-ScratchDirectory) ('mesh-gui-selftest-env-' + [Guid]::NewGuid().ToString('N') + '.env')
     try {
         $envText = "MESH_GATEWAY=mesh.example.test`r`nMESH_USER=node-two`r`nMESH_TOKEN=tok456`r`n"
         [System.IO.File]::WriteAllText($envProbe, $envText, (New-Object System.Text.UTF8Encoding($false)))
@@ -1690,6 +1733,20 @@ function Invoke-SelfTest {
     Add-SelfTestResult 'language_detection' ($detectionErrors.Count -eq 0) `
         ("detected=" + (Get-DefaultLanguage) + " effective=" + $entryLang +
          " signals=[" + ($signals -join ',') + "] " + ($detectionErrors -join '|'))
+
+    # 18. the pipeline must not depend on %TEMP% being writable
+    $scratch = Get-ScratchDirectory
+    $scratchOk = $false
+    $scratchDetail = 'dir=' + $scratch
+    try {
+        $scratchProbe = Join-Path $scratch ('scratch-probe-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+        Set-Content -LiteralPath $scratchProbe -Value 'x' -Encoding ASCII -ErrorAction Stop
+        Remove-Item -LiteralPath $scratchProbe -Force -ErrorAction Stop
+        $scratchOk = $true
+    } catch {
+        $scratchDetail += ' error=' + $_.Exception.Message
+    }
+    Add-SelfTestResult 'scratch_directory' $scratchOk $scratchDetail
 
     $failedCount = @($script:SelfTestResults | Where-Object { -not $_.pass }).Count
     return [pscustomobject]@{
