@@ -353,3 +353,67 @@ def test_publishing_is_refused_when_the_node_is_read_only(name, args):
         assert "MESH_READ_ONLY" in result["error"]
     finally:
         mcp_tools.configure(read_only=False)
+
+
+# ---------------------------------------------------------------------------
+# payload size
+# ---------------------------------------------------------------------------
+
+def test_the_published_limits_are_the_raised_ones():
+    """8 MiB was the old default; the ceiling is what an operator opts into."""
+    assert web_share.DEFAULT_MAX_BYTES == 32 * 1024 * 1024
+    assert web_share.MAX_MAX_BYTES == 64 * 1024 * 1024
+    assert web_share.MIN_MAX_BYTES < web_share.DEFAULT_MAX_BYTES < web_share.MAX_MAX_BYTES
+
+
+def test_the_transport_cap_carries_the_share_ceiling():
+    """The gateway must accept ONE websocket message holding a ceiling-sized file.
+
+    Drift here fails silently: uvicorn's default is 16 MiB, so a share above about
+    12 MiB would be published by the node and then dropped by the transport.
+    """
+    import re
+
+    gateway = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gateway.py")
+    with open(gateway, "r", encoding="utf-8", errors="replace") as handle:
+        source = handle.read()
+    match = re.search(r"ws_max_size\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024", source)
+    assert match, "gateway.py must set ws_max_size explicitly"
+    wire_cap = int(match.group(1)) * 1024 * 1024
+    # base64 grows the payload by ~4/3 before the JSON framing is added.
+    assert wire_cap >= web_share.MAX_MAX_BYTES * 4 / 3
+
+
+def test_a_file_over_the_limit_is_refused_with_a_usable_message(tmp_path):
+    mcp_tools.configure(max_share_bytes="4096")
+    oversized = tmp_path / "oversized.bin"
+    oversized.write_bytes(b"x" * 5000)
+
+    result = mcp_tools.call_tool("share_file", {"path": str(oversized), "name": "oversized"})
+
+    assert "error" in result
+    assert "MESH_WEB_MAX_BYTES" in result["error"]
+    assert "4096" in result["error"]
+    assert "5000" in result["error"]
+
+
+def test_the_limit_can_be_raised_but_never_past_the_ceiling():
+    mcp_tools.configure(max_share_bytes=str(web_share.MAX_MAX_BYTES * 4))
+    assert web_share._max_bytes() == web_share.MAX_MAX_BYTES
+
+    mcp_tools.configure(max_share_bytes=str(1))
+    assert web_share._max_bytes() == web_share.MIN_MAX_BYTES
+
+
+def test_the_default_applies_when_nothing_is_configured():
+    mcp_tools.configure(max_share_bytes="")
+    assert web_share._max_bytes() == web_share.DEFAULT_MAX_BYTES
+
+
+def test_the_environment_raises_the_limit_within_the_ceiling(monkeypatch):
+    monkeypatch.setenv("MESH_WEB_MAX_BYTES", str(48 * 1024 * 1024))
+    mcp_tools.configure(max_share_bytes="")
+    assert web_share._max_bytes() == 48 * 1024 * 1024
+
+    monkeypatch.setenv("MESH_WEB_MAX_BYTES", str(web_share.MAX_MAX_BYTES * 8))
+    assert web_share._max_bytes() == web_share.MAX_MAX_BYTES

@@ -1722,4 +1722,9 @@ app = Starlette(debug=False, routes=routes, middleware=middleware, lifespan=life
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8096, log_level="info", timeout_graceful_shutdown=2)
+    # ws_max_size matters for public file shares: the node sends the base64
+    # payload through the tunnel as ONE websocket message, so uvicorn's 16 MiB
+    # default silently drops anything above ~12 MiB. 128 MiB carries the node's
+    # maximum share size (64 MiB -> ~85 MiB on the wire) with headroom.
+    uvicorn.run(app, host="127.0.0.1", port=8096, log_level="info",
+                timeout_graceful_shutdown=2, ws_max_size=128 * 1024 * 1024)
