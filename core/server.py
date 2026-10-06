@@ -169,47 +169,72 @@ def get_coordinator_vitals() -> "NodeVitals":
     except Exception:
         load = 0.0
 
+    # ``/proc/meminfo`` and ``/proc/uptime`` are Linux-only. Ask the shared
+    # cross-platform collector first (core.vitals knows the Windows and macOS
+    # paths), and keep the inline /proc parsing as the last resort.
+    native: Optional[Dict[str, Any]] = None
+    if _core_get_host_vitals is not None:
+        try:
+            candidate = _core_get_host_vitals()
+            if isinstance(candidate, dict):
+                native = candidate
+        except Exception:
+            native = None
+
     total_mb = 1
     used_mb = 0
-    try:
-        with open("/proc/meminfo", "r") as f:
-            lines = f.readlines()
-        mem = {}
-        for line in lines:
-            parts = line.split(":")
-            if len(parts) == 2:
-                k = parts[0].strip()
-                v = parts[1].strip().split()[0]
-                if k in ["MemTotal", "MemAvailable"]:
-                    mem[k] = int(v) // 1024
-        if "MemTotal" in mem and "MemAvailable" in mem:
-            total_mb = mem["MemTotal"]
-            avail_mb = mem["MemAvailable"]
-            used_mb = max(0, total_mb - avail_mb)
-    except Exception:
-        pass
+    if native:
+        ram = native.get("ram") or {}
+        try:
+            total_mb = int(ram.get("total_mb") or 0) or 1
+            used_mb = max(0, int(ram.get("used_mb") or 0))
+        except (TypeError, ValueError):
+            total_mb, used_mb = 1, 0
+    else:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                lines = f.readlines()
+            mem = {}
+            for line in lines:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    v = parts[1].strip().split()[0]
+                    if k in ["MemTotal", "MemAvailable"]:
+                        mem[k] = int(v) // 1024
+            if "MemTotal" in mem and "MemAvailable" in mem:
+                total_mb = mem["MemTotal"]
+                avail_mb = mem["MemAvailable"]
+                used_mb = max(0, total_mb - avail_mb)
+        except Exception:
+            pass
 
     usage_pct = round((used_mb / total_mb) * 100.0, 2) if total_mb > 0 else 0.0
     usage_pct = min(100.0, max(0.0, usage_pct))
 
     total_disk_gb = 1.0
     free_disk_gb = 0.0
-    try:
-        d = shutil.disk_usage("/")
-        total_disk_gb = round(d.total / (1024 ** 3), 2)
-        free_disk_gb = round(d.free / (1024 ** 3), 2)
-    except Exception:
-        pass
+    if native:
+        disk = native.get("disk") or {}
+        try:
+            total_disk_gb = float(disk.get("total_gb") or 0.0) or 1.0
+            free_disk_gb = max(0.0, float(disk.get("free_gb") or 0.0))
+        except (TypeError, ValueError):
+            total_disk_gb, free_disk_gb = 1.0, 0.0
+    else:
+        try:
+            d = shutil.disk_usage("C:\\" if platform.system() == "Windows" else "/")
+            total_disk_gb = round(d.total / (1024 ** 3), 2)
+            free_disk_gb = round(d.free / (1024 ** 3), 2)
+        except Exception:
+            pass
 
     uptime_str = "unknown"
-    try:
-        with open("/proc/uptime", "r") as f:
-            up_secs = float(f.read().split()[0])
-            hours = int(up_secs // 3600)
-            mins = int((up_secs % 3600) // 60)
-            uptime_str = f"{hours}h {mins}m"
-    except Exception:
-        pass
+    uptime_seconds = mcp_tools.host_uptime_seconds()
+    if uptime_seconds is not None:
+        hours = int(uptime_seconds // 3600)
+        mins = int((uptime_seconds % 3600) // 60)
+        uptime_str = f"{hours}h {mins}m"
 
     fields = dict(
         hostname=hostname,
@@ -299,6 +324,9 @@ _REQUIRED_ARGS: Dict[str, Tuple[str, ...]] = {
     "run_job": ("command",),
     "job_output": ("job_id",),
     "job_kill": ("job_id",),
+    "share_file": ("path",),
+    "serve_dir": ("path",),
+    "unshare": ("name",),
 }
 
 
@@ -613,6 +641,15 @@ def configure_tools_from_env() -> None:
         write_roots=os.environ.get("MESH_WRITE_ROOTS") or None,
         jobs_dir=os.environ.get("MESH_JOBS_DIR") or None,
         max_output_chars=os.environ.get("MESH_MAX_OUTPUT_CHARS"),
+        # Public shares. ``public_url`` is deliberately NOT passed: the public
+        # domain is resolved by core/domain.py (MESH_PUBLIC_URL, domain.env, then
+        # the one default), and pinning it here to the environment variable alone
+        # would bypass the domain file.
+        web_dir=os.environ.get("MESH_WEB_DIR") or None,
+        mesh_user=os.environ.get("MESH_USER") or None,
+        max_share_bytes=os.environ.get("MESH_WEB_MAX_BYTES"),
+        max_shares=os.environ.get("MESH_WEB_MAX_SHARES"),
+        web_listing=os.environ.get("MESH_WEB_LISTING"),
     )
 
 

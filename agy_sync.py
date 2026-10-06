@@ -18,6 +18,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 import requests
 
+# The public domain lives in core/domain.py and nowhere else: this alias keeps the
+# name the rest of the file (and its generated facts) already uses, while the value
+# comes from the shared resolver - environment, then domain.env, then the one
+# default. An unconfigured deployment still shows the neutral placeholder so the
+# facts uploaded to Drive never name real infrastructure.
+from core import domain
+
 BASE_DIR = Path(__file__).resolve().parent
 TOKEN_FILE = BASE_DIR / "token.json"
 FACTS_FILE = BASE_DIR / "server_facts.json"
@@ -25,13 +32,15 @@ PROFILE_FILE = BASE_DIR / "server_profile.md"
 LOG_FILE = BASE_DIR / "agy_sync.log"
 
 # Public infrastructure identifiers are read from the environment ONLY.
-# Set GATEWAY_HOST_IP (gateway public IP), GATEWAY_HOSTNAME, AGY_PUBLIC_BASE_URL
-# (e.g. https://mesh.example.com) and MATEBOOK_IP / DEBIAN_IP / RACKNERD2_IP
-# (alias RACKNERD_IP) in the service environment. Neutral placeholders are
-# emitted when a variable is missing so generated facts never leak real hosts.
+# Set GATEWAY_HOST_IP (gateway public IP), GATEWAY_HOSTNAME, MESH_PUBLIC_URL /
+# AGY_PUBLIC_BASE_URL (e.g. https://mesh.example.com, or leave it to domain.env)
+# and MATEBOOK_IP / DEBIAN_IP / RACKNERD2_IP (alias RACKNERD_IP) in the service
+# environment. Neutral placeholders are emitted when a variable is missing so
+# generated facts never leak real hosts.
 GATEWAY_HOST_IP = os.environ.get("GATEWAY_HOST_IP", "").strip()
 GATEWAY_HOSTNAME = os.environ.get("GATEWAY_HOSTNAME", "").strip()
-AGY_PUBLIC_BASE_URL = os.environ.get("AGY_PUBLIC_BASE_URL", "").strip().rstrip("/")
+#: Alias kept for callers of this module; empty while no domain is configured.
+AGY_PUBLIC_BASE_URL = domain.public_base_url() if domain.is_explicit() else ""
 MATEBOOK_IP = os.environ.get("MATEBOOK_IP", "").strip()
 MATEBOOK_USER = os.environ.get("MATEBOOK_USER", "").strip()
 DEBIAN_IP = os.environ.get("DEBIAN_IP", "").strip()
@@ -39,15 +48,15 @@ RACKNERD2_IP = (os.environ.get("RACKNERD2_IP") or os.environ.get("RACKNERD_IP") 
 
 
 def _public_base_url() -> str:
-    """Public HTTPS base URL or a neutral placeholder."""
-    return AGY_PUBLIC_BASE_URL or "https://<your-domain>"
+    """Public HTTPS base URL, or a neutral placeholder when no domain is configured."""
+    return AGY_PUBLIC_BASE_URL or domain.PLACEHOLDER_PUBLIC_BASE_URL
 
 
 def _public_domain() -> str:
-    """Bare public domain derived from AGY_PUBLIC_BASE_URL, or a placeholder."""
+    """Bare public domain, or a neutral placeholder when no domain is configured."""
     if not AGY_PUBLIC_BASE_URL:
-        return "<your-domain>"
-    return urlparse(AGY_PUBLIC_BASE_URL).netloc or AGY_PUBLIC_BASE_URL
+        return urlparse(domain.PLACEHOLDER_PUBLIC_BASE_URL).netloc or domain.PLACEHOLDER_PUBLIC_BASE_URL
+    return domain.public_host()
 
 logging.basicConfig(
     level=logging.INFO,

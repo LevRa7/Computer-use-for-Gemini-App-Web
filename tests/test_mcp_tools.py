@@ -7,11 +7,35 @@ nothing leaks into the real ``~/.cache`` or the repository.
 import hashlib
 import json
 import os
+import sys
 import time
 
 import pytest
 
 from core import mcp_tools
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+def py_command(code: str) -> str:
+    """A command that runs *code* with this interpreter in the host's own shell.
+
+    ``bash_exec``/``run_job`` deliberately run the host shell - bash on POSIX,
+    PowerShell or cmd.exe on Windows - so a test that hardcoded ``python3``,
+    ``sleep`` or ``1>&2`` was really asserting "the host is POSIX" and failed on
+    Windows for reasons that had nothing to do with the tool. Building the
+    command from ``sys.executable`` keeps the same coverage on both platforms.
+    """
+    exe = sys.executable
+    if IS_WINDOWS:
+        # PowerShell: the call operator is what runs a quoted path.
+        return '& "%s" -c "%s"' % (exe.replace('"', '`"'), code)
+    return "'%s' -c \"%s\"" % (exe.replace("'", "'\\''"), code)
+
+
+def py_sleep(seconds: float) -> str:
+    return py_command("import time; time.sleep(%r)" % seconds)
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +79,13 @@ def test_tools_surface_contains_all_tools():
         "job_output",
         "job_kill",
         "job_list",
+        # Public shares, last so the pre-existing surface keeps its order. The
+        # deployed gateway advertises the same four names; the internal relay
+        # ("_http_share") is deliberately not part of TOOLS.
+        "share_file",
+        "serve_dir",
+        "share_list",
+        "unshare",
     ]
     for spec in mcp_tools.TOOLS:
         assert spec["description"]
@@ -98,11 +129,30 @@ def test_write_file_creates_dirs_and_reports_sha256(tmp_path):
 
 
 def test_write_file_mode_is_applied(tmp_path):
+    if IS_WINDOWS:
+        pytest.skip("Windows has no POSIX permission bits; see test_write_file_mode_on_windows")
     result = mcp_tools.call_tool(
         "write_file", {"path": "script.sh", "content": "#!/bin/sh\n", "mode": "0755"}
     )
     assert result["ok"] is True
+    assert result["mode_applied"] is True
     assert (tmp_path / "script.sh").stat().st_mode & 0o777 == 0o755
+
+
+def test_write_file_mode_on_windows_reports_the_truth(tmp_path):
+    """A 0755 request on Windows must not look like it produced a launcher.
+
+    os.chmod there only toggles the read-only attribute, so reporting plain
+    success made the model believe an executable script existed.
+    """
+    if not IS_WINDOWS:
+        pytest.skip("Windows-only behaviour")
+    result = mcp_tools.call_tool(
+        "write_file", {"path": "script.sh", "content": "#!/bin/sh\n", "mode": "0755"}
+    )
+    assert result["ok"] is True
+    assert result["mode_applied"] is False
+    assert "execute bit" in result["mode_note"]
 
 
 def test_write_file_read_only_mode(tmp_path):
@@ -204,7 +254,7 @@ def test_bash_exec_basic_fields():
 
 
 def test_bash_exec_pagination_has_no_gaps():
-    command = "python3 -c \"print('X' * 5000)\""
+    command = py_command("print('X' * 5000)")
     full = mcp_tools.call_tool("bash_exec", {"command": command, "max_chars": 1000})
     assert full["truncated"] is True
     assert len(full["stdout"]) <= 1000
@@ -229,7 +279,7 @@ def test_bash_exec_spools_large_output(tmp_path):
     size = mcp_tools.SPOOL_THRESHOLD + 100_000
     result = mcp_tools.call_tool(
         "bash_exec",
-        {"command": "python3 -c \"print('Y' * %d)\"" % size, "max_chars": 100},
+        {"command": py_command("print('Y' * %d)" % size), "max_chars": 100},
     )
     assert result["truncated"] is True
     assert result["saved_to"], "output above the spool threshold must be saved to a file"
@@ -241,9 +291,10 @@ def test_bash_exec_spools_large_output(tmp_path):
 def test_bash_exec_below_spool_threshold_is_paginated_not_spooled():
     # Just below the threshold: pagination must still reach the end without loss.
     size = mcp_tools.SPOOL_THRESHOLD - 100_000
+    command = py_command("print('Z' * %d)" % size)
     first = mcp_tools.call_tool(
         "bash_exec",
-        {"command": "python3 -c \"print('Z' * %d)\"" % size, "max_chars": 50000},
+        {"command": command, "max_chars": 50000},
     )
     assert first["saved_to"] is None
     assert first["truncated"] is True
@@ -253,8 +304,7 @@ def test_bash_exec_below_spool_threshold_is_paginated_not_spooled():
     while cursor is not None and guard < 200:
         page = mcp_tools.call_tool(
             "bash_exec",
-            {"command": "python3 -c \"print('Z' * %d)\"" % size,
-             "max_chars": 50000, "cursor": cursor},
+            {"command": command, "max_chars": 50000, "cursor": cursor},
         )
         collected += page["stdout"]
         cursor = page["next_cursor"]
@@ -263,9 +313,90 @@ def test_bash_exec_below_spool_threshold_is_paginated_not_spooled():
 
 
 def test_bash_exec_timeout_is_clamped_and_reported():
-    result = mcp_tools.call_tool("bash_exec", {"command": "sleep 3", "timeout_sec": 1})
+    result = mcp_tools.call_tool("bash_exec", {"command": py_sleep(3), "timeout_sec": 1})
     assert result["exit_code"] == 124
     assert "timed out" in result["stderr"]
+
+
+# ---------------------------------------------------------------------------
+# output decoding (non-ASCII on Windows)
+# ---------------------------------------------------------------------------
+
+def _can_encode(encoding: str, text: str) -> bool:
+    try:
+        text.encode(encoding)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+def test_decode_output_reads_utf8_first(monkeypatch):
+    """UTF-8 wins over the console code page: git, node and python children."""
+    monkeypatch.setattr(mcp_tools, "_DECODING_CACHE", ["utf-8", "cp866", "cp1251"])
+    text = "привет мир"
+    assert mcp_tools._decode_output(text.encode("utf-8")) == text
+
+
+def test_decode_output_reads_the_console_code_page(monkeypatch):
+    """cmd.exe/PowerShell builtins write the OEM console page, not the locale.
+
+    Decoding those bytes with ``locale.getpreferredencoding()`` - the default of
+    ``text=True`` - produced ``ЇаЁўҐв`` for ``echo привет`` on a Russian Windows.
+    """
+    monkeypatch.setattr(mcp_tools, "_DECODING_CACHE", ["utf-8", "cp866", "cp1251"])
+    text = "привет мир"
+    assert mcp_tools._decode_output(text.encode("cp866")) == text
+
+
+def test_decode_output_reaches_ansi_when_oem_is_absent(monkeypatch):
+    """The chain is a priority list; a failing decode moves to the next entry."""
+    monkeypatch.setattr(mcp_tools, "_DECODING_CACHE", ["utf-8", "cp1251"])
+    text = "привет мир"
+    assert mcp_tools._decode_output(text.encode("cp1251")) == text
+
+
+def test_decode_output_normalises_windows_line_endings():
+    assert mcp_tools._decode_output(b"a\r\nb\rc\n") == "a\nb\nc\n"
+    assert mcp_tools._decode_output("") == ""
+    assert mcp_tools._decode_output(None) == ""
+
+
+def test_decode_output_survives_undecodable_bytes(monkeypatch):
+    monkeypatch.setattr(mcp_tools, "_DECODING_CACHE", ["utf-8", "ascii"])
+    assert mcp_tools._decode_output(b"\xff\xfe") == "\ufffd\ufffd"
+
+
+def test_bash_exec_returns_readable_non_ascii():
+    """End-to-end through the real host shell, whichever shell that is."""
+    sample = "привет мир"
+    # Ask the child what it can actually emit: under an un-coerced C locale a
+    # python child escapes non-ASCII instead of writing it, and that is the
+    # interpreter's choice, not the tool's decoding.
+    probe = mcp_tools.call_tool(
+        "bash_exec",
+        {"command": py_command("import sys; print(sys.stdout.encoding or 'none')")},
+    )
+    encoding = (probe.get("stdout") or "").strip()
+    if not encoding or not _can_encode(encoding, sample):
+        pytest.skip("this interpreter cannot write the sample text (%r)" % encoding)
+
+    result = mcp_tools.call_tool("bash_exec", {"command": py_command("print('%s')" % sample)})
+    assert result["exit_code"] == 0
+    assert sample in result["stdout"]
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="Windows console code page behaviour")
+def test_bash_exec_decodes_a_shell_builtin_write():
+    """A shell builtin's own non-ASCII text must survive the round trip."""
+    text = "привет мир"
+    pages = mcp_tools._windows_code_pages()
+    if not any(_can_encode(page, text) for page in pages):
+        pytest.skip("this console code page cannot represent the sample text")
+    result = mcp_tools.call_tool("bash_exec", {"command": "echo %s" % text})
+    assert result["exit_code"] == 0
+    # PowerShell's echo writes one object per line, bash's one line: compare the
+    # words in order rather than the exact layout.
+    assert text in result["stdout"].replace("\n", " ").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +490,10 @@ def test_run_job_fast_output_is_not_lost():
 
 
 def test_run_job_output_and_list():
-    started = mcp_tools.call_tool("run_job", {"command": "sleep 0.3; echo hi; echo err 1>&2"})
+    command = py_command(
+        "import sys, time; time.sleep(0.3); print('hi'); sys.stderr.write('err\\n')"
+    )
+    started = mcp_tools.call_tool("run_job", {"command": command})
     assert started["job_id"]
     assert isinstance(started["pid"], int)
 
@@ -376,7 +510,7 @@ def test_run_job_output_and_list():
 
 
 def test_run_job_missing_is_reported_and_kill():
-    started = mcp_tools.call_tool("run_job", {"command": "sleep 30"})
+    started = mcp_tools.call_tool("run_job", {"command": py_sleep(30)})
     job_id = started["job_id"]
 
     running = mcp_tools.call_tool("job_output", {"job_id": job_id, "wait_ms": 0})
@@ -392,8 +526,32 @@ def test_run_job_missing_is_reported_and_kill():
     assert "error" in mcp_tools.call_tool("job_kill", {"job_id": "does-not-exist"})
 
 
+def test_job_kill_tolerates_an_already_dead_process(monkeypatch):
+    """taskkill exits non-zero ("process not found") when the tree is already gone.
+
+    That is the normal race on Windows between a job finishing and job_kill
+    arriving, and it must not be reported as a failure to stop the job.
+    """
+    class FakeCompleted(object):
+        returncode = 128
+        stdout = ""
+        stderr = 'ERROR: The process "4242" not found.'
+
+    monkeypatch.setattr(mcp_tools.subprocess, "run", lambda *a, **k: FakeCompleted())
+    mcp_tools._kill_tree_windows(4242)  # must not raise
+
+    class RealFailure(object):
+        returncode = 1
+        stdout = ""
+        stderr = "Access is denied."
+
+    monkeypatch.setattr(mcp_tools.subprocess, "run", lambda *a, **k: RealFailure())
+    with pytest.raises(OSError):
+        mcp_tools._kill_tree_windows(4242)
+
+
 def test_run_job_read_only_still_runs_but_kill_blocked():
-    started = mcp_tools.call_tool("run_job", {"command": "sleep 2"})
+    started = mcp_tools.call_tool("run_job", {"command": py_sleep(2)})
     mcp_tools.configure(read_only=True)
     assert "error" in mcp_tools.call_tool("job_kill", {"job_id": started["job_id"]})
     assert mcp_tools.call_tool("bash_exec", {"command": "echo ok"})["stdout"].strip() == "ok"
@@ -403,7 +561,7 @@ def test_run_job_read_only_still_runs_but_kill_blocked():
 
 def test_job_output_stdout_pagination():
     started = mcp_tools.call_tool(
-        "run_job", {"command": "python3 -c \"print('Z' * 5000)\""}
+        "run_job", {"command": py_command("print('Z' * 5000)")}
     )
     first = mcp_tools.call_tool(
         "job_output", {"job_id": started["job_id"], "wait_ms": 5000, "max_chars": 500}
