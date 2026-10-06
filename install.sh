@@ -10,7 +10,7 @@ MODE=""
 TLS="none"
 PORT="8096"
 DOMAIN=""
-GATEWAY="smart-server.online"
+GATEWAY=""
 USERNAME=""
 TOKEN=""
 DRY_RUN=false
@@ -23,18 +23,126 @@ EXPLICIT_LANG=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 [ -z "$SCRIPT_DIR" ] && SCRIPT_DIR="."
 
-# Bootstrap if piped from curl or run outside project
-if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
-    BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
-    mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
-    curl -fsSL "https://${GATEWAY}/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/agent.py" -o "$BOOTSTRAP_DIR/core/agent.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/server.py" -o "$BOOTSTRAP_DIR/core/server.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/mcp_tools.py" -o "$BOOTSTRAP_DIR/core/mcp_tools.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/mcp_tools.py" -o "$BOOTSTRAP_DIR/core/mcp_tools.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/core/vitals.py" -o "$BOOTSTRAP_DIR/core/vitals.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/core/__init__.py" -o "$BOOTSTRAP_DIR/core/__init__.py" 2>/dev/null || true
-    curl -fsSL "https://${GATEWAY}/skills/orchestrator.md" -o "$BOOTSTRAP_DIR/skills/orchestrator.md" 2>/dev/null || true
-    SCRIPT_DIR="$BOOTSTRAP_DIR"
-fi
+# ------------------------------------------------------------------------------
+#  PUBLIC DOMAIN - resolved from the one source of truth
+#
+#  The domain is declared exactly once, in core/domain.py. Everything below asks
+#  that same chain, in the same order, and this is the ONLY place in this script
+#  that picks a hostname:
+#
+#    1. an explicit --domain= / --gateway= on the command line;
+#    2. MESH_PUBLIC_URL in the environment;
+#    3. AGY_PUBLIC_BASE_URL in the environment (legacy alias, same meaning);
+#    4. the domain file - MESH_DOMAIN_FILE when set, otherwise
+#       /etc/antigravity-mesh/domain.env, or on Windows/Git Bash
+#       %USERPROFILE%\.config\antigravity-mesh\domain.env;
+#    5. $PUBLISHED_DOMAIN - the domain this copy was published with. The repository
+#       carries the placeholder __MESH_DOMAIN__ here and deploy_gateway.sh rewrites
+#       that line while publishing, so a served copy already knows its domain;
+#    6. core/domain.py's DEFAULT_PUBLIC_BASE_URL, but only when that module sits
+#       next to this script (a repository checkout, or a node that already
+#       bootstrapped). A clone has no published value and refusing to install from
+#       a clone would be wrong.
+#
+#  If none of them yields a real hostname the installer stops: registering a node
+#  against a domain that does not resolve produces a node that can never connect
+#  and an autostart entry that retries forever.
+# ------------------------------------------------------------------------------
+DOMAIN_PLACEHOLDER="__MESH_DOMAIN__"
+# deploy_gateway.sh rewrites THIS line only (it is anchored on PUBLISHED_DOMAIN=),
+# so the placeholder token above survives and still proves whether this copy was
+# published. In the repository the two are equal, which means "not published".
+PUBLISHED_DOMAIN="__MESH_DOMAIN__"
+
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) DEFAULT_DOMAIN_DIR="${USERPROFILE:-$HOME}/.config/antigravity-mesh" ;;
+    *)                    DEFAULT_DOMAIN_DIR="/etc/antigravity-mesh" ;;
+esac
+DEFAULT_DOMAIN_FILE="${MESH_DOMAIN_FILE:-$DEFAULT_DOMAIN_DIR/domain.env}"
+
+# https://mesh.example.com/path/ -> mesh.example.com (the authority only)
+normalise_host() {
+    printf '%s' "$1" | sed -e 's|^[A-Za-z][A-Za-z0-9+.-]*://||' -e 's|/.*$||' \
+        -e 's|^[[:space:]]*||' -e 's|[[:space:]]*$||'
+}
+
+# A KEY=VALUE file without its leading UTF-8 BOM (Windows PowerShell writes one).
+strip_bom() {
+    if [ "$(head -c 3 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+        tail -c +4 "$1"
+    else
+        cat "$1"
+    fi
+}
+
+# MESH_PUBLIC_URL outranks the legacy alias, whatever their order in the file.
+domain_file_value() {
+    local file="$1" value=""
+    if [ ! -f "$file" ]; then
+        return 0
+    fi
+    value="$(strip_bom "$file" | sed -n 's/^[[:space:]]*MESH_PUBLIC_URL[[:space:]]*=[[:space:]]*//p' | head -n 1)"
+    if [ -z "$value" ]; then
+        value="$(strip_bom "$file" | sed -n 's/^[[:space:]]*AGY_PUBLIC_BASE_URL[[:space:]]*=[[:space:]]*//p' | head -n 1)"
+    fi
+    printf '%s' "$value" | tr -d '"' | tr -d "'" | tr -d '\r' | sed -e 's|^[[:space:]]*||' -e 's|[[:space:]]*$||'
+}
+
+# The project default, taken from core/domain.py when that file is available here.
+module_default_domain() {
+    local module="$SCRIPT_DIR/core/domain.py" value=""
+    if [ ! -f "$module" ]; then
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        value="$(cd "$SCRIPT_DIR" 2>/dev/null && python3 -c 'from core import domain; print(domain.DEFAULT_PUBLIC_BASE_URL)' 2>/dev/null)" || true
+    fi
+    if [ -z "$value" ]; then
+        value="$(sed -n 's/^DEFAULT_PUBLIC_BASE_URL[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$module" | head -n 1)"
+    fi
+    printf '%s' "$value"
+}
+
+resolve_domain() {
+    local explicit_value="${1:-}" candidate=""
+    if [ -n "$explicit_value" ]; then
+        printf '%s' "$(normalise_host "$explicit_value")"
+        return 0
+    fi
+    for candidate in "${MESH_PUBLIC_URL:-}" "${AGY_PUBLIC_BASE_URL:-}"; do
+        if [ -n "$candidate" ]; then
+            printf '%s' "$(normalise_host "$candidate")"
+            return 0
+        fi
+    done
+    candidate="$(domain_file_value "$DEFAULT_DOMAIN_FILE")"
+    if [ -n "$candidate" ]; then
+        printf '%s' "$(normalise_host "$candidate")"
+        return 0
+    fi
+    if [ -n "$PUBLISHED_DOMAIN" ] && [ "$PUBLISHED_DOMAIN" != "$DOMAIN_PLACEHOLDER" ]; then
+        printf '%s' "$(normalise_host "$PUBLISHED_DOMAIN")"
+        return 0
+    fi
+    candidate="$(module_default_domain)"
+    if [ -n "$candidate" ]; then
+        printf '%s' "$(normalise_host "$candidate")"
+        return 0
+    fi
+    printf '%s' "$DOMAIN_PLACEHOLDER"
+}
+
+# Downloading the node code needs the domain, and so does every cloud-gateway
+# mode. A standalone install that already has the code next to it needs neither.
+domain_required() {
+    if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
+        return 0
+    fi
+    if [ "$MODE" != "standalone" ]; then
+        return 0
+    fi
+    return 1
+}
 
 CONFIG_DIR="$HOME/.config/antigravity-mesh"
 CONFIG_FILE="$CONFIG_DIR/agent.env"
@@ -118,7 +226,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --gateway=*)
-            GATEWAY="${1#*=}"
+            # Historical alias of --domain=: both are the explicit override.
+            DOMAIN="${1#*=}"
             shift
             ;;
         --port=*)
@@ -155,6 +264,11 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "All nodes use ONE shared domain; the node is selected by ?user=<node-name>:"
             echo "  MCP URL: https://<shared-domain>/sse?user=<node-name>&token=<token>"
+            echo ""
+            echo "The shared domain is resolved from the one place that declares it, in this order:"
+            echo "  --domain= / --gateway=, then MESH_PUBLIC_URL, then AGY_PUBLIC_BASE_URL,"
+            echo "  then ${DEFAULT_DOMAIN_FILE}, then the value this copy was published with,"
+            echo "  then core/domain.py's default when the repository is present."
             exit 0
             ;;
         *)
@@ -163,6 +277,69 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ------------------------------------------------------------------------------
+#  Resolve the shared domain, then fetch the node code from it.
+#
+#  Order matters: the CLI arguments are parsed first (so --domain= counts), the
+#  domain is resolved second, and only then is the bootstrap downloaded - from
+#  the resolved domain, never from a name baked into this file.
+# ------------------------------------------------------------------------------
+GATEWAY="$(resolve_domain "$DOMAIN")"
+
+if [ "$GATEWAY" = "$DOMAIN_PLACEHOLDER" ]; then
+    if domain_required; then
+        echo ""
+        if [ "$LANG_CHOICE" = "ru" ]; then
+            echo -e "${RED}${BOLD}[ОШИБКА] Домен шлюза не задан.${RESET}"
+            echo -e "  В этой копии установщика остался плейсхолдер ${BOLD}${DOMAIN_PLACEHOLDER}${RESET}: она не была опубликована"
+            echo -e "  скриптом deploy_gateway.sh, а домена нет ни в окружении, ни в файле ${BOLD}${DEFAULT_DOMAIN_FILE}${RESET}."
+            echo -e "  Укажите домен одним из способов:"
+            echo -e "    ${CYAN}./install.sh --domain=<общий-домен>${RESET}"
+            echo -e "    ${CYAN}MESH_PUBLIC_URL=https://<общий-домен> ./install.sh${RESET}"
+            echo -e "    ${CYAN}echo 'MESH_PUBLIC_URL=https://<общий-домен>' | sudo tee ${DEFAULT_DOMAIN_FILE}${RESET}"
+            echo -e "  ${YELLOW}Установка остановлена: регистрация на несуществующем домене не выполняется, ничего не создано.${RESET}"
+        else
+            echo -e "${RED}${BOLD}[ERROR] No gateway domain configured.${RESET}"
+            echo -e "  This copy of the installer still carries the ${BOLD}${DOMAIN_PLACEHOLDER}${RESET} placeholder: it was not"
+            echo -e "  published by deploy_gateway.sh, and no domain was found in the environment or in ${BOLD}${DEFAULT_DOMAIN_FILE}${RESET}."
+            echo -e "  Pass the domain in one of these ways:"
+            echo -e "    ${CYAN}./install.sh --domain=<shared-domain>${RESET}"
+            echo -e "    ${CYAN}MESH_PUBLIC_URL=https://<shared-domain> ./install.sh${RESET}"
+            echo -e "    ${CYAN}echo 'MESH_PUBLIC_URL=https://<shared-domain>' | sudo tee ${DEFAULT_DOMAIN_FILE}${RESET}"
+            echo -e "  ${YELLOW}Stopping: a node is never registered against a domain that does not exist, nothing was created.${RESET}"
+        fi
+        echo ""
+        exit 1
+    fi
+    # Standalone install with the node code already next to this script: no domain
+    # is needed, so this is a warning rather than a stop.
+    GATEWAY=""
+    if [ "$LANG_CHOICE" = "ru" ]; then
+        echo -e "${YELLOW}[!] Домен не задан - автономному режиму он не нужен, продолжаю.${RESET}"
+    else
+        echo -e "${YELLOW}[!] No domain configured - not needed for standalone mode, continuing.${RESET}"
+    fi
+fi
+
+# Bootstrap when piped from curl or run outside the project: the node code is
+# fetched from the SAME domain that was just resolved. core/domain.py travels with
+# it, because the node asks that module for the domain as well.
+if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
+    BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
+    mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
+    for f in core/agent.py core/server.py core/mcp_tools.py core/web_share.py core/domain.py core/vitals.py core/__init__.py skills/orchestrator.md; do
+        bootstrap_tmp="$BOOTSTRAP_DIR/${f}.part"
+        if curl -fsSL "https://${GATEWAY}/${f}" -o "$bootstrap_tmp" 2>/dev/null \
+            || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/${f}" -o "$bootstrap_tmp" 2>/dev/null; then
+            mv "$bootstrap_tmp" "$BOOTSTRAP_DIR/${f}"
+        else
+            rm -f "$bootstrap_tmp"
+        fi
+    done
+    unset bootstrap_tmp
+    SCRIPT_DIR="$BOOTSTRAP_DIR"
+fi
 
 # ------------------------------------------------------------------------------
 #  SHARED-DOMAIN CONTRACT (canonical step)
@@ -315,10 +492,12 @@ if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] Selected Mode: ${MODE:-standalone}"
     echo "[DRY-RUN] Port: $PORT"
     echo "[DRY-RUN] TLS: $TLS"
-    if [ -n "$DOMAIN" ]; then echo "[DRY-RUN] Domain: $DOMAIN"; fi
+    if [ -n "$GATEWAY" ]; then echo "[DRY-RUN] Domain: $GATEWAY"; fi
     if [ -n "$USERNAME" ]; then
         echo "[DRY-RUN] User: $USERNAME"
-        echo "[DRY-RUN] Canonical MCP URL: $(node_sse_url "$USERNAME" "${TOKEN:-<token>}")"
+        if [ -n "$GATEWAY" ]; then
+            echo "[DRY-RUN] Canonical MCP URL: $(node_sse_url "$USERNAME" "${TOKEN:-<token>}")"
+        fi
     fi
     if [ -n "$TOKEN" ]; then echo "[DRY-RUN] Token: set (standalone: stored in ${CONFIG_DIR}/standalone.env, chmod 600)"; fi
     echo "[DRY-RUN] Systemd service and dependencies check: OK"

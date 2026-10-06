@@ -3,7 +3,59 @@ import platform
 import shutil
 import socket
 import subprocess
+import time
 from typing import Dict, Any
+
+
+def _windows_cpu_usage_pct(sample_seconds: float = 0.1) -> float:
+    """Measured CPU utilisation on Windows.
+
+    Windows has no load average, so ``os.getloadavg`` does not exist and the
+    previous code reported a hardcoded 0.0. ``GetSystemTimes`` gives idle and
+    total processor time, and their delta over a short sample is the utilisation
+    every other Windows tool reports.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [
+                ("dwLowDateTime", wintypes.DWORD),
+                ("dwHighDateTime", wintypes.DWORD),
+            ]
+
+        def as_int(value: "FILETIME") -> int:
+            return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+
+        def sample():
+            idle_c, kernel_c, user_c = FILETIME(), FILETIME(), FILETIME()
+            ok = kernel32.GetSystemTimes(
+                ctypes.byref(idle_c), ctypes.byref(kernel_c), ctypes.byref(user_c)
+            )
+            if not ok:
+                return None
+            return as_int(idle_c), as_int(kernel_c), as_int(user_c)
+
+        first = sample()
+        if first is None:
+            return 0.0
+        time.sleep(sample_seconds)
+        second = sample()
+        if second is None:
+            return 0.0
+
+        idle_delta = second[0] - first[0]
+        total_delta = (second[1] - first[1]) + (second[2] - first[2])
+        if total_delta <= 0:
+            return 0.0
+        usage = 100.0 * (total_delta - idle_delta) / total_delta
+        return round(max(0.0, min(100.0, usage)), 1)
+    except Exception:
+        return 0.0
+
 
 def get_host_vitals() -> Dict[str, Any]:
     hostname = socket.gethostname()
@@ -19,6 +71,11 @@ def get_host_vitals() -> Dict[str, Any]:
                 "5m": round(load[1], 2),
                 "15m": round(load[2], 2),
             }
+        elif system == "Windows":
+            # No load average exists there: report the measured utilisation in all
+            # three slots so no consumer reads a fabricated zero.
+            usage = _windows_cpu_usage_pct()
+            cpu_load = {"1m": usage, "5m": usage, "15m": usage}
     except Exception:
         pass
 

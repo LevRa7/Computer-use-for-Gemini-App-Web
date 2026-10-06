@@ -6,16 +6,37 @@ text, while ``bash_exec`` defaulted to Git Bash when it happened to be installed
 These tests pin the platform behaviour without needing a Windows machine.
 """
 
+import builtins
 import os
+import sys
 
 import pytest
 
 from core import mcp_tools
 
 
+IS_WINDOWS = os.name == "nt"
+
+
 # ---------------------------------------------------------------------------
 # Shell selection
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def fresh_shell_cache(monkeypatch):
+    """Every test here starts from an uncached, unconfigured shell choice.
+
+    Without this the module-level cache leaks between tests: a test that sets
+    ``MESH_SHELL`` leaves the *next* test reading the previous shell, and in a
+    full-suite run the leak reaches tests in other files.
+    """
+    monkeypatch.setattr(mcp_tools, "_SHELL_CACHE", None)
+    monkeypatch.setattr(mcp_tools, "_SHELL_CACHE_KEY", None)
+    monkeypatch.delenv("MESH_SHELL", raising=False)
+    yield
+    mcp_tools._SHELL_CACHE = None
+    mcp_tools._SHELL_CACHE_KEY = None
+
 
 @pytest.fixture()
 def windows(monkeypatch):
@@ -84,6 +105,26 @@ def test_mesh_shell_git_bash_without_git_falls_back(windows, monkeypatch):
     assert mcp_tools.command_shell()[0] == "powershell"
 
 
+def test_changing_mesh_shell_takes_effect_without_a_restart(windows):
+    """The cached choice must follow ``MESH_SHELL`` instead of freezing the first value.
+
+    ``core/agent.py`` exports MESH_* from ``agent.env`` while starting up, and a
+    launcher may set the variable after the module is imported; caching without a
+    key left such a node on the wrong shell for its entire lifetime - and made
+    test outcomes depend on execution order.
+    """
+    windows.setattr(mcp_tools, "powershell_argv", lambda: ["powershell.exe", "-Command"])
+    windows.setattr(mcp_tools, "_git_bash_windows", lambda: None)
+
+    assert mcp_tools.command_shell()[0] == "powershell"
+
+    windows.setenv("MESH_SHELL", "cmd")
+    assert mcp_tools.command_shell()[0] == "cmd"
+
+    windows.delenv("MESH_SHELL")
+    assert mcp_tools.command_shell()[0] == "powershell"
+
+
 def test_linux_still_uses_bash(monkeypatch):
     monkeypatch.setattr(mcp_tools, "_IS_WINDOWS", False)
     monkeypatch.setattr(mcp_tools, "_SHELL_CACHE", None)
@@ -146,8 +187,21 @@ def test_largest_wallpaper_image_passes_a_file_through(tmp_path):
     assert mcp_tools.largest_wallpaper_image("") == ""
 
 
-def test_windows_wallpaper_is_silent_off_windows():
-    """Without winreg the helper reports nothing instead of raising."""
+def test_windows_wallpaper_is_silent_without_winreg(monkeypatch):
+    """Without the winreg module the helper reports nothing instead of raising.
+
+    The import is what makes this path Windows-only, so it is simulated rather
+    than skipped: on a real Windows box ``windows_wallpaper`` legitimately
+    returns the configured wallpaper.
+    """
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "winreg":
+            raise ImportError("no winreg")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     assert mcp_tools.windows_wallpaper() == ""
 
 
@@ -209,6 +263,8 @@ def test_system_info_windows_uses_cmd_when_powershell_missing(monkeypatch):
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr(mcp_tools, "powershell_argv", lambda: None)
     monkeypatch.setattr(mcp_tools, "_SHELL_CACHE", ("cmd", ["cmd.exe", "/d", "/s", "/c"]))
+    # The injected cache is authoritative only when its key matches MESH_SHELL.
+    monkeypatch.setattr(mcp_tools, "_SHELL_CACHE_KEY", "")
     monkeypatch.setattr(mcp_tools, "windows_wallpaper", lambda: "")
 
     mcp_tools.call_tool("system_info", {})

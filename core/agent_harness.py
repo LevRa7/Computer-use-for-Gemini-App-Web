@@ -7,8 +7,15 @@ from core.triggers import create_mesh_watchdog_trigger, create_config_trigger
 from core.policies import get_mesh_policies, ALLOWED_WORKSPACES
 from core.subagents import get_mesh_subagents, get_root_capabilities_config
 
-DEFAULT_SAVE_DIR = "/root/agy-gdrive-runner/.state/sessions"
-DEFAULT_APP_DATA_DIR = "/root/agy-gdrive-runner/.state/artifacts"
+# Derived from the coordinator workspace so the harness works wherever that root
+# is: the documented /root/agy-gdrive-runner on Linux, %USERPROFILE%\agy-gdrive-runner
+# on Windows. A hardcoded POSIX literal was rejected there by the SDK
+# ("app_data_dir must be an absolute path") because os.path.isabs('/root/...') is
+# False on Windows. os.path.abspath keeps it absolute even if the operator pointed
+# MESH_COORDINATOR_WORKSPACE at a relative path.
+_COORDINATOR_ROOT = os.path.abspath(ALLOWED_WORKSPACES[0])
+DEFAULT_SAVE_DIR = os.path.join(_COORDINATOR_ROOT, ".state", "sessions")
+DEFAULT_APP_DATA_DIR = os.path.join(_COORDINATOR_ROOT, ".state", "artifacts")
 
 ROOT_SYSTEM_INSTRUCTIONS = (
     "You are the Root Orchestrator for the Antigravity Remote Execution Mesh. "

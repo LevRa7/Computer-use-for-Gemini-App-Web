@@ -5,12 +5,27 @@ from google.antigravity import types
 from google.antigravity.hooks import policy
 from google.antigravity.hooks.policy import Policy, Decision
 
+def _platform_root(posix_root: str) -> str:
+    """Express a documented deployment root for the host running this node.
+
+    ``/root/...`` is an absolute path on Linux but only drive-relative on Windows,
+    where the SDK refuses it outright ("app_data_dir must be an absolute path") and
+    ``os.makedirs`` would scatter a ``\\root\\...`` tree beside the drive root. The
+    POSIX path is kept unchanged on POSIX hosts, so deployed services do not move.
+    """
+    if os.name != "nt":
+        return posix_root
+    leaf = posix_root.rstrip("/").rsplit("/", 1)[-1]
+    return os.path.join(os.path.expanduser("~"), leaf)
+
+
 # Workspace roots are read from the environment ONLY -- never hardcode a personal
 # home directory. Point MESH_COORDINATOR_WORKSPACE / MESH_WORKSPACE at the real
-# deployment paths in the service environment.
+# deployment paths in the service environment. The documented defaults are the
+# Linux deployment paths; on Windows the same roots live under the user profile.
 ALLOWED_WORKSPACES = [
-    os.environ.get("MESH_COORDINATOR_WORKSPACE", "/root/agy-gdrive-runner"),
-    os.environ.get("MESH_WORKSPACE", "/root/antigravity-mesh"),
+    os.environ.get("MESH_COORDINATOR_WORKSPACE") or _platform_root("/root/agy-gdrive-runner"),
+    os.environ.get("MESH_WORKSPACE") or _platform_root("/root/antigravity-mesh"),
 ]
 
 SAFE_COMMAND_PREFIXES = [
@@ -40,12 +55,27 @@ DESTRUCTIVE_COMMAND_PATTERNS = [
     re.compile(r"\bdd\s+"),
 ]
 
+def _is_within(path: str, root: str) -> bool:
+    """True when *path* is *root* itself or lives inside it.
+
+    The comparison has to use the platform separator: ``root + "/"`` never
+    matches a normpath'ed Windows path, so every file inside an allowed workspace
+    was rejected there and the policy could not be satisfied at all.
+    """
+    if path == root:
+        return True
+    root = root.rstrip("/\\")
+    for sep in {os.sep, "/", "\\"}:
+        if path.startswith(root + sep):
+            return True
+    return False
+
+
 def validate_workspace_path(path: str, allowed_workspaces: Optional[List[str]] = None) -> bool:
     workspaces = allowed_workspaces or ALLOWED_WORKSPACES
     abs_path = os.path.abspath(path)
     for ws in workspaces:
-        ws_abs = os.path.abspath(ws)
-        if abs_path == ws_abs or abs_path.startswith(ws_abs.rstrip("/") + "/"):
+        if _is_within(abs_path, os.path.abspath(ws)):
             return True
     return False
 

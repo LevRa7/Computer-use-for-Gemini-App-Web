@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 #  Antigravity Mesh - Windows PowerShell Universal Installer
 # ==============================================================================
 param(
@@ -6,7 +6,9 @@ param(
     [string]$Mode = "tunnel",
     [string]$User = "",
     [string]$Token = "",
-    [string]$Gateway = "smart-server.online",
+    # Empty on purpose: the shared domain is resolved from the one source of truth
+    # (see the PUBLIC DOMAIN block below), never from a literal in this file.
+    [string]$Gateway = "",
     [int]$Port = 8096,
     [string]$Lang = "en",
     [switch]$DryRun
@@ -44,14 +46,9 @@ if ($Lang -eq "ru") {
     Write-Host "+----------------------------------------------------------------------+" -ForegroundColor Cyan
 }
 
-if ($DryRun) {
-    if ($Lang -eq "ru") {
-        Write-Host "[DRY-RUN] Проверка зависимостей и задач: OK"
-    } else {
-        Write-Host "[DRY-RUN] Dependency and task verification: OK"
-    }
-    exit 0
-}
+# The dry run is handled after the (read-only) interpreter detection below: a
+# preflight that exits before checking anything cannot honestly report that the
+# dependencies were verified.
 
 # Python check & auto-install.
 # Windows ships a "python.exe" App Execution Alias that opens the Microsoft Store
@@ -91,16 +88,181 @@ foreach ($cand in $candidates) {
 }
 
 if (-not $hasPython) {
-    $localPyDir = "$env:LOCALAPPDATA\Programs\Python\Python312"
-    if (Test-Path "$localPyDir\python.exe") {
+    # Any per-user 3.x the python.org installer left behind, newest first. The
+    # check used to be hardcoded to 3.12/3.11 *and* forgot to record the path it
+    # found, so a machine with only 3.13 was pushed into a fresh download, and
+    # one without "python" on PATH then fell back to the bare name anyway.
+    $localRoot = "$env:LOCALAPPDATA\Programs\Python"
+    $foundPy = @()
+    if (Test-Path $localRoot) {
+        $foundPy = Get-ChildItem -Path $localRoot -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'python.exe' } |
+            Where-Object { Test-Path $_ }
+    }
+    if ($foundPy.Count -gt 0) {
+        $localPyDir = Split-Path -Parent $foundPy[0]
+        $PyExe = $foundPy[0]
         $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
         $hasPython = $true
         if ($Lang -eq "ru") {
-            Write-Host "[1/3] Python обнаружен: $localPyDir" -ForegroundColor Green
+            Write-Host "[1/3] Python обнаружен: $PyExe" -ForegroundColor Green
         } else {
-            Write-Host "[1/3] Python detected: $localPyDir" -ForegroundColor Green
+            Write-Host "[1/3] Python detected: $PyExe" -ForegroundColor Green
         }
     }
+}
+
+# ------------------------------------------------------------------------------
+#  PUBLIC DOMAIN - resolved from the one source of truth
+#
+#  The domain is declared exactly once, in core/domain.py. This block asks that
+#  same chain, in the same order, and it is the ONLY place in this script that
+#  picks a hostname:
+#
+#    1. -Gateway on the command line;
+#    2. $env:MESH_PUBLIC_URL;
+#    3. $env:AGY_PUBLIC_BASE_URL (legacy alias, same meaning);
+#    4. the domain file - $env:MESH_DOMAIN_FILE when set, otherwise
+#       %USERPROFILE%\.config\antigravity-mesh\domain.env;
+#    5. $PublishedDomain - the domain this copy was published with. The repository
+#       carries the placeholder __MESH_DOMAIN__ there and deploy_gateway.sh
+#       rewrites that line while publishing, so a served copy knows its domain;
+#    6. core/domain.py's DEFAULT_PUBLIC_BASE_URL, read through the interpreter
+#       found above (a repository checkout, or a node that bootstrapped already).
+#
+#  If none of them yields a real hostname the installer stops. A node registered
+#  against a domain that does not resolve can never connect, and its autostart
+#  entry would retry that dead endpoint forever.
+# ------------------------------------------------------------------------------
+$DomainPlaceholder = "__MESH_DOMAIN__"
+# deploy_gateway.sh rewrites THIS line only (anchored on $PublishedDomain), so the
+# placeholder above survives as the "this copy was not published" marker.
+$PublishedDomain = "__MESH_DOMAIN__"
+$ScriptRoot = $null
+if ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+    $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+
+function Get-NormalisedHost([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    $text = $Value.Trim().Trim('"').Trim("'")
+    $text = $text -replace '^[A-Za-z][A-Za-z0-9+.-]*://', ''
+    $text = $text.Split('/')[0]
+    return $text.Trim()
+}
+
+function Get-DomainFileValue([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return "" }
+    $values = @{}
+    try {
+        # -Encoding UTF8 also absorbs the BOM that PowerShell itself writes.
+        foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#') -or -not $trimmed.Contains('=')) { continue }
+            $index = $trimmed.IndexOf('=')
+            $key = $trimmed.Substring(0, $index).Trim()
+            $value = $trimmed.Substring($index + 1).Trim().Trim('"').Trim("'")
+            if ($key) { $values[$key] = $value }
+        }
+    } catch { return "" }
+    if ($values['MESH_PUBLIC_URL']) { return $values['MESH_PUBLIC_URL'] }
+    if ($values['AGY_PUBLIC_BASE_URL']) { return $values['AGY_PUBLIC_BASE_URL'] }
+    return ""
+}
+
+function Get-ModuleDefaultDomain {
+    if (-not $ScriptRoot) { return "" }
+    $module = Join-Path $ScriptRoot 'core\domain.py'
+    if (-not (Test-Path -LiteralPath $module)) { return "" }
+    $value = ""
+    if ($PyExe) {
+        $interpreter = ($PyExe -split ' ')[0]
+        $probe = "import sys; sys.path.insert(0, r'$ScriptRoot'); from core import domain; print(domain.DEFAULT_PUBLIC_BASE_URL)"
+        try { $value = & $interpreter -c $probe 2>$null } catch { $value = "" }
+    }
+    if (-not $value) {
+        $match = Select-String -LiteralPath $module -Pattern '^DEFAULT_PUBLIC_BASE_URL\s*=\s*"([^"]+)"' |
+            Select-Object -First 1
+        if ($match) { $value = $match.Matches[0].Groups[1].Value }
+    }
+    return "$value".Trim()
+}
+
+$DomainFilePath = if ($env:MESH_DOMAIN_FILE) { $env:MESH_DOMAIN_FILE } else { "$env:USERPROFILE\.config\antigravity-mesh\domain.env" }
+$ResolvedDomain = Get-NormalisedHost $Gateway
+if (-not $ResolvedDomain) { $ResolvedDomain = Get-NormalisedHost $env:MESH_PUBLIC_URL }
+if (-not $ResolvedDomain) { $ResolvedDomain = Get-NormalisedHost $env:AGY_PUBLIC_BASE_URL }
+if (-not $ResolvedDomain) { $ResolvedDomain = Get-NormalisedHost (Get-DomainFileValue $DomainFilePath) }
+if (-not $ResolvedDomain -and $PublishedDomain -ne $DomainPlaceholder) {
+    $ResolvedDomain = Get-NormalisedHost $PublishedDomain
+}
+if (-not $ResolvedDomain) { $ResolvedDomain = Get-NormalisedHost (Get-ModuleDefaultDomain) }
+
+$DomainMissing = [string]::IsNullOrWhiteSpace($ResolvedDomain) -or $ResolvedDomain -eq $DomainPlaceholder
+if ($DomainMissing) {
+    if ($Lang -eq "ru") {
+        Write-Host ""
+        Write-Host "[!] Домен шлюза не задан." -ForegroundColor Red
+        # ${...} matters: "$DomainPlaceholder:" would be read as a drive-qualified
+        # variable reference and the whole script fails to parse in PowerShell 5.1.
+        Write-Host "    В этой копии установщика остался плейсхолдер ${DomainPlaceholder}: она не была" -ForegroundColor Red
+        Write-Host "    опубликована скриптом deploy_gateway.sh, а домена нет ни в окружении, ни в" -ForegroundColor Red
+        Write-Host "    файле $DomainFilePath." -ForegroundColor Red
+        Write-Host "    Укажите домен одним из способов:" -ForegroundColor Yellow
+        Write-Host "      .\install.ps1 -Gateway <общий-домен>" -ForegroundColor Yellow
+        Write-Host "      `$env:MESH_PUBLIC_URL='https://<общий-домен>'; .\install.ps1" -ForegroundColor Yellow
+        Write-Host "      Set-Content '$DomainFilePath' 'MESH_PUBLIC_URL=https://<общий-домен>'" -ForegroundColor Yellow
+        Write-Host "    Установка остановлена: регистрация на несуществующем домене не выполняется," -ForegroundColor Yellow
+        Write-Host "    файл конфигурации и автозапуск не создаются." -ForegroundColor Yellow
+    } else {
+        Write-Host ""
+        Write-Host "[!] No gateway domain configured." -ForegroundColor Red
+        Write-Host "    This copy of the installer still carries the $DomainPlaceholder placeholder: it" -ForegroundColor Red
+        Write-Host "    was not published by deploy_gateway.sh, and no domain was found in the" -ForegroundColor Red
+        Write-Host "    environment or in $DomainFilePath." -ForegroundColor Red
+        Write-Host "    Pass the domain in one of these ways:" -ForegroundColor Yellow
+        Write-Host "      .\install.ps1 -Gateway <shared-domain>" -ForegroundColor Yellow
+        Write-Host "      `$env:MESH_PUBLIC_URL='https://<shared-domain>'; .\install.ps1" -ForegroundColor Yellow
+        Write-Host "      Set-Content '$DomainFilePath' 'MESH_PUBLIC_URL=https://<shared-domain>'" -ForegroundColor Yellow
+        Write-Host "    Stopping: a node is never registered against a domain that does not exist," -ForegroundColor Yellow
+        Write-Host "    no config file and no autostart are created." -ForegroundColor Yellow
+    }
+    Write-Host ""
+    if (-not $DryRun) { exit 1 }
+} else {
+    $Gateway = $ResolvedDomain
+}
+
+# Preflight: report what was detected and change nothing. This runs after the
+# detection steps above and before any install (winget, the Python installer,
+# pip), so the reported state is real and the machine is untouched.
+if ($DryRun) {
+    $probeExe = if ($PyExe) { ($PyExe -split " ")[0] } else { $null }
+    $wsState = "unknown"
+    if ($probeExe) {
+        & $probeExe -c "import websockets" 2>$null
+        $wsState = if ($LASTEXITCODE -eq 0) { "installed" } else { "missing" }
+    }
+    $pyState = if ($hasPython) { $PyExe } else { "not found" }
+    $domainState = if ($DomainMissing) { "NOT CONFIGURED" } else { $Gateway }
+    if ($Lang -eq "ru") {
+        Write-Host "[DRY-RUN] Python      : $pyState"
+        Write-Host "[DRY-RUN] websockets  : $wsState"
+        Write-Host "[DRY-RUN] Домен       : $domainState"
+        Write-Host "[DRY-RUN] Конфиг      : $env:USERPROFILE\.config\antigravity-mesh"
+        Write-Host "[DRY-RUN] Автозапуск  : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
+        Write-Host "[DRY-RUN] Действий не выполнено." -ForegroundColor Yellow
+    } else {
+        Write-Host "[DRY-RUN] Python      : $pyState"
+        Write-Host "[DRY-RUN] websockets  : $wsState"
+        Write-Host "[DRY-RUN] Domain      : $domainState"
+        Write-Host "[DRY-RUN] Config      : $env:USERPROFILE\.config\antigravity-mesh"
+        Write-Host "[DRY-RUN] Autostart   : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
+        Write-Host "[DRY-RUN] Nothing was changed." -ForegroundColor Yellow
+    }
+    if ($DomainMissing -or -not $hasPython) { exit 2 }
+    exit 0
 }
 
 if (-not $hasPython) {
@@ -194,6 +356,8 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
         "core/agent.py",
         "core/server.py",
         "core/mcp_tools.py",
+        "core/web_share.py",
+        "core/domain.py",
         "core/vitals.py",
         "core/__init__.py",
         "skills/orchestrator.md"
@@ -307,7 +471,9 @@ try {
 } catch {}
 if ([string]::IsNullOrWhiteSpace($detectedMac)) {
     try {
-        $res = python -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>&1
+        # Use the interpreter resolved above: a bare "python" may be the Microsoft
+        # Store App Execution Alias, which is on PATH but runs nothing.
+        $res = & $pyExeOnly -c "import uuid; print(':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]))" 2>&1
         if ($LASTEXITCODE -eq 0 -and $res) {
             $detectedMac = $res.ToString().Trim()
         }
@@ -326,10 +492,42 @@ if (-not [string]::IsNullOrWhiteSpace($Token)) {
     $regPayloadObj.token = $Token
 }
 $regPayload = $regPayloadObj | ConvertTo-Json
-$response = Invoke-RestMethod -Uri "https://$Gateway/api/register" -Method Post -Body $regPayload -ContentType "application/json"
+# Registration is the one step that cannot be skipped or guessed: without a real
+# node name and token the agent can never connect. This used to run under
+# $ErrorActionPreference = "Continue", so a DNS/TLS/HTTP failure printed an error,
+# the script carried on, wrote an EMPTY agent.env, installed a permanently broken
+# Startup launcher, printed a link with empty user/token and claimed that link had
+# been copied - leaving the operator with a node that retries a dead endpoint after
+# every login. Fail closed instead, before anything on disk is touched.
+try {
+    $response = Invoke-RestMethod -Uri "https://$Gateway/api/register" -Method Post `
+        -Body $regPayload -ContentType "application/json" -ErrorAction Stop
+} catch {
+    if ($Lang -eq "ru") {
+        Write-Host "[!] Не удалось зарегистрировать узел на '$Gateway': $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "    Проверьте, что домен шлюза разрешается в DNS и сервер доступен, затем повторите:" -ForegroundColor Yellow
+        Write-Host "      .\install.ps1 -Gateway <ваш-домен>" -ForegroundColor Yellow
+        Write-Host "    Ничего не установлено: файл конфигурации и автозапуск не создавались." -ForegroundColor Yellow
+    } else {
+        Write-Host "[!] Could not register this node on '$Gateway': $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "    Check that the gateway domain resolves in DNS and the server is reachable, then re-run:" -ForegroundColor Yellow
+        Write-Host "      .\install.ps1 -Gateway <your-domain>" -ForegroundColor Yellow
+        Write-Host "    Nothing was installed: no config file and no autostart were created." -ForegroundColor Yellow
+    }
+    exit 1
+}
 
 $AssignedUser = $response.username
 $AssignedToken = $response.token
+
+if ([string]::IsNullOrWhiteSpace($AssignedUser) -or [string]::IsNullOrWhiteSpace($AssignedToken)) {
+    if ($Lang -eq "ru") {
+        Write-Host "[!] Шлюз '$Gateway' ответил без имени узла или токена - установка остановлена." -ForegroundColor Red
+    } else {
+        Write-Host "[!] Gateway '$Gateway' answered without a node name or token - stopping." -ForegroundColor Red
+    }
+    exit 1
+}
 
 # ------------------------------------------------------------------------------
 # SHARED-DOMAIN CONTRACT: one public domain serves every node and the node is
@@ -389,7 +587,7 @@ $env:MESH_TOKEN = $AssignedToken
     WshShell.CurrentDirectory = "$ScriptDir"
     ' Log the output so a silent autostart failure can be diagnosed later.
     WshShell.Run "cmd /c """"$pyExeForVbs"" -m core.agent >> """"$agentLog"""" 2>&1""", 0, False
-    "@ | Out-File -FilePath $startupVbs -Encoding ascii
+"@ | Out-File -FilePath $startupVbs -Encoding Unicode
 
 # Launch now
 Start-Process $pyExeOnly -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden

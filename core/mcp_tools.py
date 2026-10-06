@@ -29,6 +29,7 @@ import fnmatch
 import glob as _glob
 import hashlib
 import json
+import locale
 import os
 import re
 import shutil
@@ -42,6 +43,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+#: The public domain is owned by core/domain.py; this module asks for it instead of
+#: keeping a fallback chain of its own. Standard library only, so importing it here
+#: costs nothing and cannot fail for a missing third-party package.
+from core import domain
+
 # ---------------------------------------------------------------------------
 # Optional dependency: the host vitals collector.  Kept optional so the module
 # stays importable under a bare interpreter.
@@ -50,6 +56,14 @@ try:  # pragma: no cover - exercised implicitly by the environment
     from core.vitals import get_host_vitals as _core_get_host_vitals  # type: ignore
 except Exception:  # pragma: no cover
     _core_get_host_vitals = None  # type: ignore
+
+# Optional: the public file-share server. Not every checkout carries it, so the
+# import is guarded - when it is present it is configured with the same public
+# domain as everything else, from core/domain.py.
+try:  # pragma: no cover - core/web_share.py is optional
+    from core import web_share as _web_share  # type: ignore
+except Exception:  # pragma: no cover
+    _web_share = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +80,18 @@ if _IS_WINDOWS:  # pragma: no cover - Windows only
         subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
 
 _SHELL_CACHE: Optional[Tuple[str, List[str]]] = None
+#: The ``MESH_SHELL`` value ``_SHELL_CACHE`` was built from.  Caching alone would
+#: freeze whatever the environment said at the first tool call, so a node that
+#: exports ``MESH_SHELL`` later (agent.env is read at startup, but a launcher may
+#: set it after the module is imported) would keep the wrong shell forever.
+_SHELL_CACHE_KEY: Optional[str] = None
+
+
+def _shell_override() -> str:
+    """The operator's ``MESH_SHELL`` choice, normalised (empty when unset)."""
+    if not _IS_WINDOWS:
+        return ""
+    return os.environ.get("MESH_SHELL", "").strip().lower()
 
 
 def _git_bash_windows() -> Optional[str]:
@@ -130,11 +156,14 @@ def command_shell() -> Tuple[str, List[str]]:
         MESH_SHELL=cmd       cmd.exe (native syntax, no PowerShell startup cost)
         MESH_SHELL=git-bash  Git for Windows' bash, when it is installed
         (unset)              PowerShell, else cmd.exe
+
+    The choice is cached per ``MESH_SHELL`` value, so changing the variable (or
+    reading it from ``agent.env`` after the module was imported) takes effect.
     """
-    global _SHELL_CACHE
-    if _SHELL_CACHE is None:
+    global _SHELL_CACHE, _SHELL_CACHE_KEY
+    override = _shell_override()
+    if _SHELL_CACHE is None or _SHELL_CACHE_KEY != override:
         if _IS_WINDOWS:
-            override = os.environ.get("MESH_SHELL", "").strip().lower()
             if override in ("cmd", "cmd.exe"):
                 _SHELL_CACHE = ("cmd", cmd_argv())
             elif override in ("git-bash", "gitbash", "bash"):
@@ -145,6 +174,7 @@ def command_shell() -> Tuple[str, List[str]]:
         else:
             bash = shutil.which("bash")
             _SHELL_CACHE = ("bash", [bash, "-c"]) if bash else ("sh", ["/bin/sh", "-c"])
+        _SHELL_CACHE_KEY = override
     return _SHELL_CACHE
 
 
@@ -179,6 +209,9 @@ _READ_ONLY = False
 _WRITE_ROOTS: Optional[List[str]] = None
 _JOBS_DIR = os.path.realpath(os.path.expanduser(_DEFAULT_JOBS_DIR))
 _MAX_OUTPUT_CHARS = _DEFAULT_MAX_OUTPUT_CHARS
+#: Explicit public base URL for links this node hands out. ``None`` means "ask
+#: core/domain.py", which is the normal case.
+_PUBLIC_URL: Optional[str] = None
 
 _META_LOCK = threading.RLock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
@@ -217,9 +250,16 @@ def configure(**kwargs: Any) -> None:
     """(Re)configure the module.  All keys are optional.
 
     Recognised keys: ``workspace``, ``read_only``, ``allow_write``,
-    ``write_roots``, ``jobs_dir``, ``max_output_chars``.
+    ``write_roots``, ``jobs_dir``, ``max_output_chars``, ``public_url``, and the
+    web-share keys ``web_dir``, ``mesh_user``, ``max_share_bytes``,
+    ``max_shares``, ``web_listing``.
+
+    ``public_url`` overrides the public domain for links this node publishes;
+    leaving it out keeps the value that :mod:`core.domain` resolves (environment,
+    then the domain file, then the one default).
     """
     global _WORKSPACE, _READ_ONLY, _WRITE_ROOTS, _JOBS_DIR, _MAX_OUTPUT_CHARS
+    global _PUBLIC_URL
 
     if kwargs.get("workspace"):
         _WORKSPACE = os.path.realpath(os.path.expanduser(str(kwargs["workspace"])))
@@ -238,6 +278,37 @@ def configure(**kwargs: Any) -> None:
                 _MAX_OUTPUT_CHARS = value
         except (TypeError, ValueError):
             pass
+    if "public_url" in kwargs:
+        _PUBLIC_URL = domain.normalise_public_base_url(kwargs.get("public_url")) or None
+
+    # The public file-share server publishes links; it takes its base from the same
+    # single source as everything else (core/web_share.py ships only with some
+    # checkouts, hence the guard). Only an *explicit* ``public_url`` is pushed down:
+    # with no override web_share asks core.domain itself, so editing MESH_PUBLIC_URL
+    # or domain.env moves share links without re-configuring anything, and no second
+    # copy of the fallback chain appears here. An empty string means "no override",
+    # which is web_share's reset value.
+    if _web_share is not None:
+        try:
+            _web_share.configure(
+                web_dir=kwargs.get("web_dir"),
+                public_url=_PUBLIC_URL or "",
+                user=kwargs.get("mesh_user"),
+                max_bytes=kwargs.get("max_share_bytes"),
+                max_shares=kwargs.get("max_shares"),
+                listing=kwargs.get("web_listing"),
+            )
+        except Exception:
+            pass
+
+
+def public_base_url() -> str:
+    """Public base URL this node publishes, e.g. ``https://mesh.example.com``.
+
+    An explicit ``configure(public_url=...)`` wins; otherwise the answer comes from
+    :mod:`core.domain`, so gateway, node and share links never disagree.
+    """
+    return _PUBLIC_URL or domain.public_base_url()
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +398,114 @@ def _sanitize_output(text: str) -> str:
     return "".join(
         ch for ch in text if ch in ("\n", "\r", "\t") or (ord(ch) >= 32 and ord(ch) != 127)
     )
+
+
+# ---------------------------------------------------------------------------
+# Child-process output decoding
+#
+# A captured pipe carries bytes, and on Windows the same node can see three
+# different encodings in one session: cmd.exe and PowerShell builtins write the
+# OEM console code page (cp866 on a Russian box, cp437/850 elsewhere), most
+# native tools write the ANSI code page (cp1251 here), and tools that opt into
+# UTF-8 (git, curl, node, python with PYTHONUTF8) write UTF-8.  Decoding with
+# ``locale.getpreferredencoding()`` — the default of ``text=True`` — silently
+# turned cp866 ``echo привет`` into ``ЇаЁўҐв`` and UTF-8 output into ``РїСЂРёРІРµС‚``.
+# There is no in-band marker to trust, so try the encodings in order of how
+# unambiguous they are and fall back only when a decode actually fails.
+# ---------------------------------------------------------------------------
+
+_DECODING_CACHE: Optional[List[str]] = None
+
+
+def _windows_code_pages() -> List[str]:
+    """Code pages a Windows child may write: OEM console CP first, then ANSI."""
+    pages: List[str] = []
+    try:
+        import ctypes
+
+        for getter in ("GetOEMCP", "GetACP"):
+            try:
+                code_page = int(getattr(ctypes.windll.kernel32, getter)())
+            except Exception:
+                continue
+            if code_page > 0:
+                pages.append("cp%d" % code_page)
+    except Exception:
+        pass
+    return pages
+
+
+def _output_decodings() -> List[str]:
+    """Candidate encodings for captured child output, most likely first.
+
+    Order matters and single-byte code pages never fail to decode, so this is a
+    priority list rather than a real fallback chain:
+
+    1. UTF-8 - what git, curl, node and (with the environment below) python emit.
+    2. The OEM console code page - what cmd.exe and PowerShell write, both for
+       their own messages and for the native console tools they launch.
+    3. The ANSI code page - the last resort for a program using the ANSI API.
+    """
+    candidates = ["utf-8"]
+    if _IS_WINDOWS:
+        candidates.extend(_windows_code_pages())
+    else:
+        try:
+            candidates.append(locale.getpreferredencoding(False))
+        except Exception:
+            pass
+
+    unique: List[str] = []
+    seen = set()
+    for name in candidates:
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return unique
+
+
+def _child_env() -> Dict[str, str]:
+    """Environment for a child shell.
+
+    On Windows a Python child whose stdout is a pipe encodes with the *ANSI* code
+    page, which is neither UTF-8 nor the OEM code page the surrounding shell uses.
+    Telling python children to speak UTF-8 removes that third, undetectable case;
+    an operator's explicit setting still wins.
+    """
+    env = dict(os.environ)
+    if _IS_WINDOWS:
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+    return env
+
+
+def _decode_output(data: Any) -> str:
+    """Decode captured child output (bytes) into text without mojibake.
+
+    Line endings are normalised to ``\\n``: reading bytes instead of using
+    ``text=True`` would otherwise let a Windows child's ``\\r\\n`` leak into
+    paginated output and break cursor stitching.
+    """
+    global _DECODING_CACHE
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    if not data:
+        return ""
+    if _DECODING_CACHE is None:
+        _DECODING_CACHE = _output_decodings()
+    for encoding in _DECODING_CACHE:
+        try:
+            text = data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+    return data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _paginate(full: str, cursor: Any, max_chars: int) -> Tuple[str, bool, Optional[int]]:
@@ -499,6 +678,28 @@ def _spool_output(text: str) -> Optional[str]:
 # Tool 1-3: legacy tools (kept as-is for compatibility)
 # ---------------------------------------------------------------------------
 
+def host_uptime_seconds() -> Optional[float]:
+    """Host uptime in seconds, or None when the platform cannot report it.
+
+    ``/proc/uptime`` only exists on Linux; Windows answers through
+    ``GetTickCount64`` (milliseconds since boot, immune to the 49-day wrap of the
+    32-bit variant).
+    """
+    try:
+        with open("/proc/uptime", "r") as handle:
+            return float(handle.read().split()[0])
+    except Exception:
+        pass
+    if _IS_WINDOWS:
+        try:
+            import ctypes
+
+            return float(ctypes.windll.kernel32.GetTickCount64() / 1000.0)
+        except Exception:
+            return None
+    return None
+
+
 def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
     """Report that this node is reachable, with hard evidence.
 
@@ -510,12 +711,7 @@ def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
     import socket as _socket
 
     now = datetime.datetime.now().astimezone()
-    uptime_s = None
-    try:
-        with open("/proc/uptime", "r") as handle:
-            uptime_s = float(handle.read().split()[0])
-    except Exception:
-        pass
+    uptime_s = host_uptime_seconds()
     try:
         hostname = _socket.gethostname()
     except Exception:
@@ -693,9 +889,12 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
 
     def run_argv(argv: List[str], timeout: float = 8.0) -> str:
         try:
-            out = _sp.run(argv, capture_output=True, text=True, timeout=timeout,
+            out = _sp.run(argv, capture_output=True, timeout=timeout,
                           creationflags=_POPEN_FLAGS)
-            return (out.stdout or out.stderr).strip()
+            # Disk labels, adapter names and localized CIM strings are not ASCII:
+            # decode explicitly instead of trusting the locale.
+            text = _decode_output(out.stdout) or _decode_output(out.stderr)
+            return text.strip()
         except Exception:
             return ""
 
@@ -825,31 +1024,40 @@ def _tool_list_dir(args: Dict[str, Any]) -> Dict[str, Any]:
 def _run_bash(command: str, timeout: int) -> Tuple[str, str, int, float]:
     started = time.time()
     try:
+        # Bytes, not text: the child's encoding is discovered with
+        # _decode_output() instead of assumed from the locale (see above).
         proc = subprocess.run(
             _shell_argv(command),
             cwd=_WORKSPACE if os.path.isdir(_WORKSPACE) else None,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
             timeout=timeout,
-            errors="replace",
             creationflags=_POPEN_FLAGS,
+            env=_child_env(),
         )
-        return proc.stdout or "", proc.stderr or "", proc.returncode, round(time.time() - started, 3)
+        return (
+            _decode_output(proc.stdout),
+            _decode_output(proc.stderr),
+            proc.returncode,
+            round(time.time() - started, 3),
+        )
     except subprocess.TimeoutExpired as exc:
-        out = exc.stdout or ""
-        err = exc.stderr or ""
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", "replace")
-        if isinstance(err, bytes):
-            err = err.decode("utf-8", "replace")
+        out = _decode_output(exc.stdout)
+        err = _decode_output(exc.stderr)
         err = (err + "\n" if err else "") + (
-            "Command timed out after %d seconds. Tip: for long background tasks use "
-            "'nohup ... > output.log 2>&1 &' or run_job." % timeout
+            "Command timed out after %d seconds. Tip: for long tasks start them with "
+            "run_job instead of bash_exec.%s" % (timeout, _background_hint())
         )
         return out, err, 124, round(time.time() - started, 3)
     except Exception as exc:
         return "", str(exc), 1, round(time.time() - started, 3)
+
+
+def _background_hint() -> str:
+    """The shell-correct way to leave something running on this host."""
+    if _IS_WINDOWS:
+        return " There is no '&' background operator in PowerShell or cmd."
+    return " On POSIX: 'nohup <command> > output.log 2>&1 &'."
 
 
 def _tool_bash_exec(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -979,7 +1187,34 @@ def _tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
         data = content.encode("utf-8", "replace")
         _atomic_write_bytes(target, data, mode=mode)
-        return {"ok": True, "path": target, "bytes": len(data), "sha256": _sha256_hex(data)}
+        result: Dict[str, Any] = {
+            "ok": True,
+            "path": target,
+            "bytes": len(data),
+            "sha256": _sha256_hex(data),
+        }
+        if mode is not None:
+            # Report what the filesystem actually kept. On Windows a 0755 request
+            # silently becomes "read-write, no execute bit" because the platform
+            # has no POSIX mode bits — claiming success would make the model
+            # believe it produced an executable script.
+            effective: Optional[int] = None
+            try:
+                effective = os.stat(target).st_mode & 0o777
+            except OSError:
+                pass
+            result["mode"] = ("0%o" % effective) if effective is not None else None
+            if _IS_WINDOWS:
+                result["mode_applied"] = False
+                result["mode_note"] = (
+                    "Windows has no POSIX permission bits: chmod only toggles the "
+                    "read-only attribute, so the execute bit was not set. Run scripts "
+                    "through their interpreter (python script.py) or give them a "
+                    "recognised extension (.ps1/.bat/.cmd)."
+                )
+            else:
+                result["mode_applied"] = effective == mode
+        return result
     except Exception as exc:
         return {"error": "write_file failed: %s" % exc}
 
@@ -1301,14 +1536,26 @@ def _pid_alive_windows(pid: int) -> bool:
     """
     try:
         import ctypes
+        from ctypes import wintypes
+
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        # Declare the signatures: a HANDLE is pointer-sized, and letting ctypes
+        # default to c_int truncates it on 64-bit, so CloseHandle would receive a
+        # value that is not the handle OpenProcess returned.
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
         if not handle:
             return False
         try:
-            code = ctypes.c_ulong()
+            code = wintypes.DWORD()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                 return False
             return code.value == STILL_ACTIVE
@@ -1500,6 +1747,7 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
                 bufsize=0,
                 start_new_session=not _IS_WINDOWS,
                 creationflags=_POPEN_FLAGS,
+                env=_child_env(),
             )
         except Exception as exc:
             return {"error": "failed to start job: %s" % exc}
@@ -1595,8 +1843,11 @@ def _tool_job_output(args: Dict[str, Any]) -> Dict[str, Any]:
 
         def _read_text(path: str) -> str:
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                    return _sanitize_output(handle.read())
+                # The pump stores raw bytes: the child's encoding is discovered
+                # here, the same way bash_exec decodes its own capture. Reading
+                # as UTF-8 only would mangle a cmd.exe job on a non-English box.
+                with open(path, "rb") as handle:
+                    return _sanitize_output(_decode_output(handle.read()))
             except Exception:
                 return ""
 
@@ -1637,10 +1888,22 @@ if _IS_WINDOWS:
 
 def _kill_tree_windows(pid: int) -> None:
     """End a job and its children on Windows (there are no process groups to signal)."""
-    proc = subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))],
-                          capture_output=True, text=True, timeout=15)
-    if proc.returncode != 0:
-        raise OSError((proc.stderr or proc.stdout or "taskkill failed").strip())
+    proc = subprocess.run(
+        ["taskkill", "/T", "/F", "/PID", str(int(pid))],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=15,
+        creationflags=_POPEN_FLAGS,
+    )
+    if proc.returncode == 0:
+        return
+    detail = (_decode_output(proc.stderr) or _decode_output(proc.stdout)).strip()
+    # "ERROR: The process "1234" not found." means the tree is already gone —
+    # the usual case when a short-lived job finishes between job_output and
+    # job_kill. That is success for the caller, not a failure to report.
+    if "not found" in detail.lower() or "не найдено" in detail.lower() or not detail:
+        return
+    raise OSError(detail)
 
 
 def _tool_job_kill(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1729,6 +1992,63 @@ def _tool_job_list(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Public web shares (core/web_share.py)
+#
+# ``share_file``/``serve_dir`` start a real loopback-only static web server on
+# this node; the gateway relays GET/HEAD from
+# https://<shared-domain>/<node>/<name>-<secret>/... into it over the tunnel.
+# The module is optional (an older checkout may not carry it), so every tool
+# answers an honest "update the node" error instead of raising.
+#
+# ``_http_share`` is the internal relay target and is deliberately NOT part of
+# TOOLS, so it never appears in tools/list and cannot be called by the model.
+# ---------------------------------------------------------------------------
+
+def _web_share_error() -> Dict[str, Any]:
+    return {
+        "error": "web sharing is unavailable on this node: core/web_share.py is missing. "
+                 "Re-run the installer (or update the node) to get the share tools."
+    }
+
+
+def _tool_share_file(args: Dict[str, Any]) -> Dict[str, Any]:
+    if _READ_ONLY:
+        return {"error": "MESH_READ_ONLY is set: publishing files is disabled on this node"}
+    if _web_share is None:
+        return _web_share_error()
+    return _web_share.share_file(args.get("path"), args.get("name"), args.get("overwrite", False))
+
+
+def _tool_serve_dir(args: Dict[str, Any]) -> Dict[str, Any]:
+    if _READ_ONLY:
+        return {"error": "MESH_READ_ONLY is set: publishing directories is disabled on this node"}
+    if _web_share is None:
+        return _web_share_error()
+    return _web_share.serve_dir(args.get("path"), args.get("name"))
+
+
+def _tool_share_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    if _web_share is None:
+        return _web_share_error()
+    return _web_share.share_list()
+
+
+def _tool_unshare(args: Dict[str, Any]) -> Dict[str, Any]:
+    if _web_share is None:
+        return _web_share_error()
+    target = args.get("name") or args.get("slug") or args.get("url")
+    return _web_share.unshare(target)
+
+
+def _tool_http_share(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Internal: serve one public GET/HEAD relayed by the gateway."""
+    if _web_share is None:
+        return {"status": 404, "headers": {"content-type": "text/plain; charset=utf-8"},
+                "body_b64": ""}
+    return _web_share.handle_http_request(args)
+
+
+# ---------------------------------------------------------------------------
 # Tool definitions (MCP schemas)
 # ---------------------------------------------------------------------------
 
@@ -1782,7 +2102,7 @@ TOOLS: List[Dict[str, Any]] = [
             "PowerShell or cmd.exe on Windows) and write the command for that shell. "
             "Output is paginated: when the result is "
             "cut, call again with cursor=next_cursor to continue (nothing is dropped). Large "
-            "outputs (>256 KB) are spooled to a file returned in saved_to."
+            "outputs (above 2 MB) are spooled to a file returned in saved_to."
         ),
         "inputSchema": _schema(
             {
@@ -1815,13 +2135,17 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "write_file",
         "title": "Write File",
-        "description": "Atomically create or overwrite a file (tmp file + os.replace).",
+        "description": (
+            "Atomically create or overwrite a file (tmp file + os.replace). On Windows the "
+            "optional mode is not honoured (no POSIX permission bits) and the result says so."
+        ),
         "inputSchema": _schema(
             {
                 "path": {"type": "string", "description": "File path to write."},
                 "content": {"type": "string", "description": "Full file content."},
                 "create_dirs": {"type": "boolean", "description": "Create parent directories (default true)."},
-                "mode": {"type": "string", "description": "Octal file mode, e.g. \"0644\"."},
+                "mode": {"type": "string",
+                         "description": "Octal file mode, e.g. \"0644\". POSIX only; ignored on Windows."},
             },
             ["path", "content"],
         ),
@@ -1920,6 +2244,66 @@ TOOLS: List[Dict[str, Any]] = [
             "limit": {"type": "integer", "description": "How many jobs to return (1-50, default 20)."},
         }),
     },
+    {
+        "name": "share_file",
+        "title": "Share File (public URL)",
+        "description": (
+            "Publish ONE local file on the internet through the Mesh gateway. The file is copied "
+            "into the node's share root and a public HTTPS link is returned on the shared domain: "
+            "https://<shared-domain>/<node>/<name>-<random>/<filename>. Anyone who has the link can "
+            "read the file (the random part of the path is the credential), so treat the link like a "
+            "password. The node must be connected to the Mesh gateway for the link to work. Use "
+            "share_list to see active shares and unshare to revoke one."
+        ),
+        "inputSchema": _schema(
+            {
+                "path": {"type": "string", "description": "Path of the local file to publish."},
+                "name": {"type": "string",
+                         "description": "Human name in the URL (default: the file name without extension)."},
+                "overwrite": {"type": "boolean",
+                              "description": "Replace an existing share with the same name (default false)."},
+            },
+            ["path"],
+        ),
+    },
+    {
+        "name": "serve_dir",
+        "title": "Serve Directory (public URL)",
+        "description": (
+            "Start a static web server for a local directory and return its public HTTPS link: "
+            "https://<shared-domain>/<node>/<name>-<random>/. The directory is served in place "
+            "(no copy): index.html is used when present, otherwise a directory listing is shown. "
+            "Serving is read-only (GET/HEAD only) and the random path segment is the credential. "
+            "Use unshare to stop the server; the directory itself is never deleted."
+        ),
+        "inputSchema": _schema(
+            {
+                "path": {"type": "string", "description": "Local directory to serve."},
+                "name": {"type": "string",
+                         "description": "Human name in the URL (default: the directory name)."},
+            },
+            ["path"],
+        ),
+    },
+    {
+        "name": "share_list",
+        "title": "Share List",
+        "description": "List active public shares with their URLs, roots and whether the local server is running.",
+        "inputSchema": _schema({}),
+    },
+    {
+        "name": "unshare",
+        "title": "Unshare (revoke URL)",
+        "description": (
+            "Stop a public share and revoke its link. Accepts the share name, its slug or the full "
+            "URL. A file share also deletes the copy that was made in the share root; a served "
+            "directory is left untouched on disk."
+        ),
+        "inputSchema": _schema(
+            {"name": {"type": "string", "description": "Share name, slug or public URL from share_list."}},
+            ["name"],
+        ),
+    },
 ]
 
 
@@ -1943,6 +2327,13 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "job_output": _tool_job_output,
     "job_kill": _tool_job_kill,
     "job_list": _tool_job_list,
+    "share_file": _tool_share_file,
+    "serve_dir": _tool_serve_dir,
+    "share_list": _tool_share_list,
+    "unshare": _tool_unshare,
+    # Internal gateway relay (never advertised in TOOLS / tools/list). The deployed
+    # gateway reaches a share by calling this tool over the tunnel.
+    "_http_share": _tool_http_share,
 }
 
 

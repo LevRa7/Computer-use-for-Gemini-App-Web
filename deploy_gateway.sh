@@ -29,7 +29,10 @@
 #    MESH_GATEWAY_WWW_DIR        default /var/www/antigravity-mesh
 #    MESH_GATEWAY_SERVICE        default agy-gateway.service
 #    MESH_GATEWAY_BACKUP_DIR     default /root/backups/antigravity-mesh
-#    MESH_PUBLIC_URL             default https://smart-server.online
+#    MESH_PUBLIC_URL             the public domain. When unset it is read from
+#                                MESH_DOMAIN_FILE (default
+#                                /etc/antigravity-mesh/domain.env), and failing
+#                                that from core/domain.py's single default
 # ==============================================================================
 set -euo pipefail
 
@@ -61,7 +64,20 @@ APP_DIR="${MESH_GATEWAY_APP_DIR:-/opt/antigravity-mesh}"
 WWW_DIR="${MESH_GATEWAY_WWW_DIR:-/var/www/antigravity-mesh}"
 SERVICE="${MESH_GATEWAY_SERVICE:-agy-gateway.service}"
 BACKUP_ROOT="${MESH_GATEWAY_BACKUP_DIR:-/root/backups/antigravity-mesh}"
-PUBLIC_URL="${MESH_PUBLIC_URL:-https://smart-server.online}"
+# ------------------------------------------------------------------------------
+# The public domain: ONE source. ops/mesh-domain.sh implements the same order
+# that core/domain.py implements at runtime - MESH_PUBLIC_URL, then the domain
+# file, then core/domain.py's single default - so this script holds no domain
+# literal of its own and switching the domain is never an edit here.
+# ------------------------------------------------------------------------------
+# shellcheck source=ops/mesh-domain.sh
+. "$SCRIPT_DIR/ops/mesh-domain.sh"
+mesh_resolve_domain "$SCRIPT_DIR" \
+    || die "Cannot determine the public domain: export MESH_PUBLIC_URL, write MESH_PUBLIC_URL into ${MESH_DOMAIN_FILE:-/etc/antigravity-mesh/domain.env}, or run from a checkout that has core/domain.py"
+DOMAIN_FILE="$MESH_DOMAIN_FILE_RESOLVED"
+PUBLIC_URL="$MESH_DOMAIN_URL"
+# The installers take an authority ("mesh.example.com"), not a URL.
+PUBLISH_HOST="$MESH_DOMAIN_HOST"
 
 for d in "$APP_DIR" "$WWW_DIR" "$BACKUP_ROOT"; do
     case "$d" in /*) ;; *) die "Path must be absolute: $d" ;; esac
@@ -120,21 +136,52 @@ echo "  public url : $PUBLIC_URL"
 echo "  node code  : $WITH_NODE_CODE (${#NODE_FILES[@]} files)"
 echo "  dry run    : $DRY_RUN"
 
+# The served installers must carry the resolved domain instead of the
+# __MESH_DOMAIN__ placeholder: the published copy is what a new user downloads,
+# and 'irm .../install.ps1 | iex' cannot be handed a parameter. Only the
+# PUBLISHED_DOMAIN / $PublishedDomain line is rewritten, so the placeholder stays
+# in the file as the "this copy came from the repository" marker.
+PUBLISH_DIR="$(mktemp -d)"
+manifest=""
+trap 'rm -f "${manifest:-}"; rm -rf "${PUBLISH_DIR:-}"' EXIT
+
+publish_installer() {
+    src="$1"
+    dst="$2"
+    sed -e "s|^PUBLISHED_DOMAIN=.*|PUBLISHED_DOMAIN=\"$PUBLISH_HOST\"|" \
+        -e "s|^\([[:space:]]*\)\$PublishedDomain = .*|\1\$PublishedDomain = \"$PUBLISH_HOST\"|" \
+        "$src" > "$dst"
+    grep -q '__MESH_DOMAIN__' "$dst" \
+        || die "publishing $src would lose the placeholder marker"
+}
+
 # local path -> remote path
 PAIRS=()
 for f in "${APP_FILES[@]}"; do PAIRS+=("$f|$STAGE/$(basename "$f")"); done
-for f in "${WWW_FILES[@]}"; do PAIRS+=("$f|$STAGE/$(basename "$f")"); done
+for f in "${WWW_FILES[@]}"; do
+    published="$PUBLISH_DIR/$(basename "$f")"
+    publish_installer "$f" "$published"
+    PAIRS+=("$published|$STAGE/$(basename "$f")")
+done
 for f in ${NODE_FILES[@]+"${NODE_FILES[@]}"}; do PAIRS+=("$f|$STAGE/$f"); done
 
 if [ "$DRY_RUN" = true ]; then
+    echo "  domain source : ${MESH_PUBLIC_URL:+MESH_PUBLIC_URL environment variable}${MESH_PUBLIC_URL:-$( [ -f "$DOMAIN_FILE" ] && echo "$DOMAIN_FILE" || echo "core/domain.py default" )}"
+    echo "  publishes as  : $PUBLISH_HOST"
     for pair in "${PAIRS[@]}"; do
         local_f="${pair%%|*}"; remote_f="${pair##*|}"
         case "$local_f" in
-            gateway.py) dest="$APP_DIR/$(basename "$local_f")" ;;
-            *)          dest="$WWW_DIR/$local_f" ;;
+            "$PUBLISH_DIR"/*) shown="$(basename "$local_f") (domain rewritten to $PUBLISH_HOST)" ;;
+            *)                shown="$local_f" ;;
         esac
-        echo "  would deploy: $local_f -> $dest"
+        case "$local_f" in
+            */gateway.py|gateway.py) dest="$APP_DIR/gateway.py" ;;
+            */core/*.py)             dest="$APP_DIR/core/$(basename "$local_f")" ;;
+            *)                       dest="$WWW_DIR/${remote_f#$STAGE/}" ;;
+        esac
+        echo "  would deploy: $shown -> $dest"
     done
+    echo "  would write : $DOMAIN_FILE  (MESH_PUBLIC_URL=$PUBLIC_URL)"
     echo "  would back up into: $BACKUP_ROOT/$TS"
     echo "  would restart     : $SERVICE"
     ok "dry run complete"
@@ -151,7 +198,6 @@ ok "gateway reachable, directories present"
 
 # 2) upload + on-host sha256 manifest verification -----------------------------
 manifest="$(mktemp)"
-trap 'rm -f "$manifest"' EXIT
 for pair in "${PAIRS[@]}"; do
     local_f="${pair%%|*}"; remote_f="${pair##*|}"
     rput "$local_f" "$remote_f"
@@ -170,6 +216,7 @@ for n in install.sh install.ps1 gateway.py; do
     [ -f $WWW_DIR/\$n ] && cp -a $WWW_DIR/\$n $BACKUP_ROOT/$TS/\$n.www || true
 done
 [ -d $WWW_DIR/core ] && cp -a $WWW_DIR/core $BACKUP_ROOT/$TS/core || true
+[ -d $APP_DIR/core ] && cp -a $APP_DIR/core $BACKUP_ROOT/$TS/app-core || true
 [ -d $WWW_DIR/skills ] && cp -a $WWW_DIR/skills $BACKUP_ROOT/$TS/skills || true
 [ -f /etc/antigravity-mesh/gateway.env ] && cp -a /etc/antigravity-mesh/gateway.env $BACKUP_ROOT/$TS/ || true
 true"
@@ -180,12 +227,53 @@ SVC_USER="$(rsh "systemctl show -p User --value $SERVICE | tr -d '[:space:]'")"
 [ -n "$SVC_USER" ] || SVC_USER=root
 rsh "set -e
 install -o $SVC_USER -g $SVC_USER -m 644 $STAGE/gateway.py $APP_DIR/gateway.py
+
+# gateway.py imports core.domain for the single domain source. systemd runs
+# '/usr/bin/python3 $APP_DIR/gateway.py', so sys.path[0] is $APP_DIR and the
+# package has to live beside the script.
+mkdir -p $APP_DIR/core
+install -o $SVC_USER -g $SVC_USER -m 644 $STAGE/core/__init__.py $APP_DIR/core/__init__.py
+install -o $SVC_USER -g $SVC_USER -m 644 $STAGE/core/domain.py $APP_DIR/core/domain.py
+
 install -o root -g root -m 755 $STAGE/install.sh $WWW_DIR/install.sh
-install -o root -g root -m 644 $STAGE/install.ps1 $WWW_DIR/install.ps1"
+install -o root -g root -m 644 $STAGE/install.ps1 $WWW_DIR/install.ps1
+
+# The repository copy of install.ps1 carries a UTF-8 BOM on purpose: Windows
+# PowerShell 5.1 decodes a BOM-less script with the ANSI code page, and the
+# Cyrillic strings then turn into smart quotes that break the parser, so
+# '.\install.ps1' from a clone would not run at all.
+#
+# The SERVED copy must not carry it. Invoke-WebRequest hands the BOM to iex as
+# part of the first token, which stops param(...) from being the first statement,
+# and the documented 'irm https://<domain>/install.ps1 | iex' then fails to
+# parse. nginx declares 'charset utf-8' for this location, so the BOM-less copy
+# is decoded correctly by the client and iex parses it cleanly.
+if [ \"\$(head -c 3 $WWW_DIR/install.ps1 | od -An -tx1 | tr -d ' \\n')\" = 'efbbbf' ]; then
+    tail -c +4 $WWW_DIR/install.ps1 > $WWW_DIR/install.ps1.nobom
+    chown --reference=$WWW_DIR/install.ps1 $WWW_DIR/install.ps1.nobom
+    chmod --reference=$WWW_DIR/install.ps1 $WWW_DIR/install.ps1.nobom
+    mv -f $WWW_DIR/install.ps1.nobom $WWW_DIR/install.ps1
+fi"
 if [ "$WITH_NODE_CODE" = true ]; then
     rsh "set -e
 for f in $STAGE/core/*.py; do install -o root -g root -m 644 \"\$f\" $WWW_DIR/core/; done
 for f in $STAGE/skills/*.md; do install -o root -g root -m 644 \"\$f\" $WWW_DIR/skills/; done"
+fi
+
+# The one place this host configures the domain. core/domain.py reads this file,
+# so the gateway, the served installers and any node here agree on one value.
+rsh "set -e
+mkdir -p /etc/antigravity-mesh
+if [ -f /etc/antigravity-mesh/domain.env ] && ! grep -qx 'MESH_PUBLIC_URL=$PUBLIC_URL' /etc/antigravity-mesh/domain.env; then
+    cp -a /etc/antigravity-mesh/domain.env $BACKUP_ROOT/$TS/domain.env.previous || true
+fi
+printf 'MESH_PUBLIC_URL=%s\n' '$PUBLIC_URL' > /etc/antigravity-mesh/domain.env
+chmod 644 /etc/antigravity-mesh/domain.env
+cat /etc/antigravity-mesh/domain.env"
+
+if rsh "grep -q '^[[:space:]]*MESH_PUBLIC_URL=' /etc/antigravity-mesh/gateway.env 2>/dev/null"; then
+    warn "gateway.env also sets MESH_PUBLIC_URL and wins over $DOMAIN_FILE"
+    warn "drop that line so the domain file stays the only place (backup: $BACKUP_ROOT/$TS)"
 fi
 ok "files installed (app owner: $SVC_USER)"
 

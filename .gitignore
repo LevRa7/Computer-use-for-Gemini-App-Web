@@ -7,6 +7,9 @@ scratch_*
 __pycache__/
 *.pyc
 .pytest_cache/
+# Windows test environment created by run_tests_windows.ps1 (pytest + pywin32).
+.win-test-deps/
+.win-served/
 win11_screen.png
 .state/
 registry.json
