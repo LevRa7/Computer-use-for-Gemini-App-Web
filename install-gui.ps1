@@ -39,7 +39,24 @@ param(
 
     # Build every page in every language, exercise the process pipeline and the
     # URL parser, then exit. Used by tests/test_installer_gui.py.
-    [switch]$SelfTest
+    [switch]$SelfTest,
+
+    # Install without opening a window: the same steps the wizard runs, their
+    # output on stdout, and the resulting MCP URL as MESH_URL=<url>. This is what
+    # makes the compiled installer verifiable end to end.
+    #
+    # Every name here is prefixed on purpose. At script scope "$script:Mode" and a
+    # parameter "$Mode" are the SAME variable, so the initialiser for the wizard's
+    # state would overwrite whatever the caller passed - the bug that once made
+    # -Lang do nothing at all.
+    [switch]$RunInstall,
+    [ValidateSet('quick', 'custom', 'ssh')]
+    [string]$InstallMode = 'quick',
+    [string]$InstallUser = '',
+    [string]$InstallGateway = '',
+    [string]$InstallToken = '',
+    [string]$InstallSshTarget = '',
+    [int]$InstallSshPort = 22
 )
 
 $ErrorActionPreference = 'Continue'
@@ -1793,6 +1810,58 @@ if ($SelfTest) {
     $report | ConvertTo-Json -Depth 6
     if ($report.ok) { exit 0 }
     exit 1
+}
+
+if ($RunInstall) {
+    $script:Mode = $InstallMode
+    $script:Node = $InstallUser
+    $script:Domain = $InstallGateway
+    $script:Token = $InstallToken
+    $script:SshTarget = $InstallSshTarget
+    $script:SshPort = $InstallSshPort
+    $script:Headless = $true
+
+    if (-not (Test-InstallOptions)) {
+        Write-Output ('INSTALL_REFUSED ' + $script:OptionError)
+        exit 2
+    }
+
+    if ($script:Mode -eq 'ssh') {
+        $steps = New-SshSteps -Target "$($script:SshTarget)".Trim() -Port $script:SshPort `
+            -Domain "$($script:Domain)".Trim()
+    } else {
+        $steps = New-ConsoleInstallerSteps -Mode $script:Mode -Node "$($script:Node)".Trim() `
+            -Domain "$($script:Domain)".Trim() -Token "$($script:Token)".Trim()
+    }
+
+    $script:PipeResult = $null
+    Reset-Pipeline -Steps $steps -OnFinish {
+        param($failed, $exitCode, $output)
+        $script:PipeResult = @{ Failed = $failed; Exit = $exitCode; Output = $output }
+    }
+
+    $deadline = (Get-Date).AddMinutes(15)
+    while ($script:Pipe.Running -and (Get-Date) -lt $deadline) {
+        Update-Pipeline
+        Start-Sleep -Milliseconds 250
+    }
+
+    $failed = $true
+    $code = 1
+    $output = ''
+    if ($script:PipeResult) {
+        $failed = [bool]$script:PipeResult.Failed
+        $code = $script:PipeResult.Exit
+        $output = [string]$script:PipeResult.Output
+    }
+    Write-Output $output
+    if ($failed) {
+        Write-Output ('INSTALL_FAILED exit=' + $code)
+        exit 1
+    }
+    $url = Get-ResultUrl -Text $output -Mode $script:Mode
+    Write-Output ('MESH_URL=' + $url)
+    exit 0
 }
 
 $script:Device = Get-DeviceInfo

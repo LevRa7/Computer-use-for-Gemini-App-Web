@@ -57,7 +57,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Sta -File .\install-gui.ps1
 .\AntigravityMesh-Setup-0.2.6.exe -Lang ru   # начать на русском
 .\AntigravityMesh-Setup-0.2.6.exe -SelfTest  # самопроверка без окна, печатает JSON
 .\AntigravityMesh-Setup-0.2.6.exe --where    # куда распаковывается и почему
+.\AntigravityMesh-Setup-0.2.6.exe --unpack   # распаковать груз и выйти
 .\AntigravityMesh-Setup-0.2.6.exe --help     # краткая справка
+
+# установка без окна: печатает вывод установщика и строку MESH_URL=<ссылка>
+.\AntigravityMesh-Setup-0.2.6.exe -RunInstall -InstallMode quick
+.\AntigravityMesh-Setup-0.2.6.exe -RunInstall -InstallMode custom -InstallUser node-1 -InstallGateway mesh.example.com
 ```
 
 Это лаунчер, а не переписанный мастер: внутрь упакован один zip с мастером,
@@ -66,6 +71,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Sta -File .\install-gui.ps1
 поэтому логика установки остаётся ровно одна, и режим SSH получает свои `core/` и
 `install.sh`.
 
+* Маркер распаковки — **хеш груза**, а не версия. Иначе пересобранный `.exe` с той же
+  версией продолжал бы запускать мастера из первой распаковки: файл на диске новый, а
+  работает старый код, и все исправления остаются невидимыми. Проверяется тестом
+  `test_setup_exe_refreshes_a_stale_payload`.
 * Папку распаковки можно задать переменной `MESH_SETUP_DIR`.
 * Если `%LOCALAPPDATA%\AntigravityMesh` недоступна для записи, лаунчер **проверяет
   кандидатов настоящей записью** и переходит к следующему: сначала `%TEMP%`, затем

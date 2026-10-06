@@ -319,3 +319,68 @@ def test_setup_exe_reports_its_version(setup_exe):
     )
     assert run.returncode == 0, run.stderr
     assert _package_version() in (run.stdout or ""), run.stdout
+
+
+@needs_windows
+def test_setup_exe_refreshes_a_stale_payload(setup_exe, tmp_path):
+    """A rebuilt executable must not keep running the payload an earlier build unpacked.
+
+    The unpack marker used to hold the version, and the version does not change
+    between rebuilds of a release. The executable therefore reused whatever the
+    first build had unpacked and silently ran a stale wizard: every later fix was
+    invisible, which is exactly how a release shipped with a broken installer.
+    """
+    payload_dir = tmp_path / "payload"
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    environment = dict(os.environ)
+    environment["MESH_SETUP_DIR"] = str(payload_dir)
+    environment["TEMP"] = str(temp_dir)
+    environment["TMP"] = str(temp_dir)
+
+    def run(*args):
+        return subprocess.run(
+            [environment.get("ComSpec", "cmd.exe"), "/c", str(setup_exe)] + list(args),
+            capture_output=True, text=True, env=environment, timeout=900)
+
+    # --unpack prepares the payload without installing anything.
+    assert run("--unpack").returncode == 0
+    script = payload_dir / "install-gui.ps1"
+    assert script.exists(), "the payload was not unpacked"
+
+    marker = (payload_dir / ".payload-ok").read_text(encoding="ascii").strip()
+    assert re.fullmatch(r"[0-9a-f]{64}", marker), (
+        "the unpack marker must identify the payload, not the version: %r" % marker)
+
+    # Simulate what an older build left behind: a version marker next to a payload
+    # that no longer matches the executable.
+    (payload_dir / ".payload-ok").write_text("0.2.6", encoding="ascii")
+    script.write_text("stale\n", encoding="ascii")
+
+    assert run("--unpack").returncode == 0
+    restored = script.read_text(encoding="ascii", errors="replace")
+    assert len(restored) > 1000, "the stale payload was not refreshed"
+    assert "RunInstall" in restored, "the refreshed payload is not the one this build carries"
+
+
+@needs_windows
+def test_script_parameters_do_not_collide_with_script_variables():
+    """At script scope "$script:X" and a parameter "$X" are the same variable.
+
+    "$script:Lang = 'en'" overwrote whatever -Lang had bound, and because 'en' is
+    truthy the detection branch then never ran: the wizard always started in
+    English and -Lang did nothing. Any new parameter sharing a name with a script
+    variable reintroduces exactly that, so the names are checked here.
+    """
+    text = _read_text(GUI_SCRIPT)
+    start = text.index("param(")
+    end = text.index("\n)", start) + 2
+    param_block = text[start:end]
+
+    names = re.findall(r"\$(\w+)(?=\s*(?:=|,|\r?\n))", param_block)
+    assert names, "no parameters found in:\n%s" % param_block
+
+    offenders = [name for name in names
+                 if re.search(r"\$script:%s\b" % re.escape(name), text)]
+    assert offenders == [], (
+        "these parameter names collide with script variables: %s" % ", ".join(offenders))

@@ -94,6 +94,21 @@ internal static class Launcher
         {
             return Report(WhereReport(), canWrite, 0);
         }
+        if (args.Length == 1 && args[0] == "--unpack")
+        {
+            // Unpack and stop. Pre-stages the payload, and it is how the refresh
+            // behaviour is verified without performing an installation.
+            try
+            {
+                string unpacked = EnsurePayload();
+                return Report("unpacked " + Version() + " to " + unpacked + Environment.NewLine,
+                              canWrite, 0);
+            }
+            catch (Exception ex)
+            {
+                return Fail("Could not unpack the installer payload.", ex, canWrite);
+            }
+        }
 
         string root;
         try
@@ -185,6 +200,7 @@ internal static class Launcher
              + "  AntigravityMesh-Setup.exe -SelfTest       headless self-check, prints JSON" + Environment.NewLine
              + "  AntigravityMesh-Setup.exe --version       print the version" + Environment.NewLine
              + "  AntigravityMesh-Setup.exe --where         show where the payload goes" + Environment.NewLine
+             + "  AntigravityMesh-Setup.exe --unpack        unpack the payload and stop" + Environment.NewLine
              + Environment.NewLine
              + "Everything is unpacked under" + Environment.NewLine
              + "  %LOCALAPPDATA%\\AntigravityMesh\\setup\\<version>" + Environment.NewLine
@@ -293,7 +309,18 @@ internal static class Launcher
     {
         string root = PayloadRoot();
         string marker = Path.Combine(root, ".payload-ok");
-        if (File.Exists(marker) && File.Exists(Path.Combine(root, EntryScript)))
+
+        // The marker records the hash of the payload this executable carries, not
+        // the version. Keying it on the version meant a rebuilt executable reused
+        // whatever the first build had unpacked and quietly ran a stale wizard.
+        string stamp = PayloadInfo.Sha256;
+        string unpacked = null;
+        try
+        {
+            if (File.Exists(marker)) { unpacked = File.ReadAllText(marker).Trim(); }
+        }
+        catch { unpacked = null; }
+        if (unpacked == stamp && File.Exists(Path.Combine(root, EntryScript)))
         {
             return root;
         }
@@ -328,7 +355,7 @@ internal static class Launcher
                     entry.ExtractToFile(destination, true);
                 }
             }
-            File.WriteAllText(marker, Version());
+            File.WriteAllText(marker, stamp);
         }
         finally
         {
