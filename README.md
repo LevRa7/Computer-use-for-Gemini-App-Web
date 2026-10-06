@@ -62,14 +62,66 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 ## 🛠️ What Gemini can do on your machine (MCP tools)
 
-| Category | Tools |
+**19 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
+
+### Status and host information
+
+| Tool | What it does |
 | :--- | :--- |
-| Terminal | `bash_exec(command)` |
-| Files | `list_dir(path)` · `read_file(path, start_line, end_line)` · `write_file(path, content)` · `edit_file(path, old_string, new_string)` |
-| Search | `grep_search(pattern, path)` · `glob_find(pattern, path)` |
-| Long-running jobs | `run_job(command)` → `job_output(job_id)` · `job_kill(job_id)` · `job_list()` |
-| Status | `system_vitals()` · `system_info()` · `mesh_status()` |
-| Agent behaviour | `get_orchestration_skill()` — loads the agent's operating rules |
+| `mesh_status()` | Confirms the node is reachable, with live evidence from the host itself. Call it first if the machine looks offline. |
+| `system_info()` | One-call host summary: OS, desktop, user, home, disks, memory, load, top processes, the current wallpaper, and `command_shell` — the shell `bash_exec` will actually use. |
+| `system_vitals()` | CPU, RAM and disk metrics. |
+
+### Shell
+
+| Tool | What it does |
+| :--- | :--- |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Runs a shell command. The shell matches the **host**, not the tool's name — `bash` on Linux/macOS, PowerShell or `cmd.exe` on Windows; check `command_shell` from `system_info()` first. Output is paginated: when it is cut, call again with `cursor=next_cursor`, nothing is dropped; output above 2 MB is spooled to a file returned in `saved_to`. `timeout_sec` is 1–120 (default 25). |
+
+### Files
+
+| Tool | What it does |
+| :--- | :--- |
+| `list_dir(path)` | Lists files and directories (workspace by default). |
+| `read_file(path, start_line, end_line, max_chars, cursor)` | Reads a text file with line numbers, optionally restricted to a line range. Paginated like `bash_exec`. |
+| `write_file(path, content, create_dirs, mode)` | Atomically creates or overwrites a file (temp file + `os.replace`). `mode` is POSIX-only: on Windows it is not honoured, and the result says so instead of pretending. |
+| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Replaces an exact substring. `old_string` must match exactly once unless `replace_all` is set; `expected_sha256` guards against overwriting a file that changed since it was read. |
+
+### Search
+
+| Tool | What it does |
+| :--- | :--- |
+| `grep_search(pattern, path, glob, limit, ignore_case, fixed, context)` | Recursively searches file contents, skipping binary files and heavy directories. `fixed` treats the pattern as literal text, `context` adds surrounding lines, `limit` is 1–1000 (default 200). |
+| `glob_find(pattern, path)` | Finds files by glob pattern (`*` and `**`). |
+
+### Long-running work
+
+| Tool | What it does |
+| :--- | :--- |
+| `run_job(command, cwd)` | Starts a command in the background and returns a `job_id`. |
+| `job_output(job_id, wait_ms, max_chars, cursor)` | Reads a job's output, optionally waiting up to 20 s for completion. Paginated. |
+| `job_kill(job_id, signal)` | Terminates a job. `signal` is `TERM` (default), `KILL`, `INT`, `HUP` or `QUIT`. |
+| `job_list(limit)` | Lists recent jobs, newest first (20 by default, max 50). |
+
+### Publishing files and web pages
+
+These four make something on your machine readable from the internet. The link is served by the gateway on the shared domain, so **the node has to stay connected for it to work**.
+
+| Tool | What it does |
+| :--- | :--- |
+| `share_file(path, name, overwrite)` | Publishes **one file**: it is copied into the node's share root and you get `https://<shared-domain>/<node>/<name>-<random>/<filename>`. `overwrite` replaces an existing share with the same name. |
+| `serve_dir(path, name)` | Serves a **directory** in place — no copy is made. `index.html` is used when present, otherwise a directory listing is shown. Read-only (GET/HEAD only). Returns `https://<shared-domain>/<node>/<name>-<random>/`. |
+| `share_list()` | Lists active shares with their URLs, their roots, and whether the local server is running. |
+| `unshare(name)` | Stops a share and revokes its link. Accepts the share name, its slug or the full URL. A file share also deletes the copy in the share root; a served directory is left untouched on disk. |
+
+> [!IMPORTANT]
+> The random part of the path **is** the credential — anyone who has the link can read the file or browse the directory. Treat a share link like a password, and `unshare` it when you are done. Size limits: 32 MiB per file by default, 64 MiB ceiling via `MESH_WEB_MAX_BYTES`.
+
+### Agent behaviour
+
+| Tool | What it does |
+| :--- | :--- |
+| `get_orchestration_skill()` | Loads the agent's current operating rules and orchestration skill. |
 
 > [!TIP]
 > Gemini gives a single tool call roughly 30 seconds. For anything longer (builds, backups, downloads) the agent uses `run_job` and polls `job_output`, so tasks never get cut off.
@@ -350,14 +402,66 @@ Gemini в браузере или на телефоне умеет разгов�
 
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
-| Категория | Инструменты |
+**19 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+
+### Состояние и сведения о хосте
+
+| Инструмент | Что делает |
 | :--- | :--- |
-| Терминал | `bash_exec(command)` |
-| Файлы | `list_dir(path)` · `read_file(path, start_line, end_line)` · `write_file(path, content)` · `edit_file(path, old_string, new_string)` |
-| Поиск | `grep_search(pattern, path)` · `glob_find(pattern, path)` |
-| Долгие задачи | `run_job(command)` → `job_output(job_id)` · `job_kill(job_id)` · `job_list()` |
-| Состояние | `system_vitals()` · `system_info()` · `mesh_status()` |
-| Поведение агента | `get_orchestration_skill()` — загружает рабочие правила агента |
+| `mesh_status()` | Подтверждает, что узел доступен, живыми данными с самого хоста. Вызывать первым, если машина кажется offline. |
+| `system_info()` | Сводка о хосте одним вызовом: ОС, рабочий стол, пользователь, домашний каталог, диски, память, загрузка, топ процессов, текущие обои и `command_shell` — та оболочка, которую реально использует `bash_exec`. |
+| `system_vitals()` | Метрики CPU, ОЗУ и дисков. |
+
+### Оболочка
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Выполняет команду оболочки. Оболочка соответствует **хосту**, а не названию инструмента — `bash` на Linux/macOS, PowerShell или `cmd.exe` на Windows; сначала посмотрите `command_shell` из `system_info()`. Вывод постраничный: если обрезан, вызовите снова с `cursor=next_cursor`, ничего не теряется; вывод больше 2 МБ сохраняется в файл, путь в `saved_to`. `timeout_sec` — 1–120 (по умолчанию 25). |
+
+### Файлы
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `list_dir(path)` | Список файлов и каталогов (по умолчанию — рабочий каталог). |
+| `read_file(path, start_line, end_line, max_chars, cursor)` | Читает текстовый файл с номерами строк, при желании — диапазон строк. Постранично, как `bash_exec`. |
+| `write_file(path, content, create_dirs, mode)` | Атомарно создаёт или перезаписывает файл (временный файл + `os.replace`). `mode` — только для POSIX: на Windows он не применяется, и результат об этом честно сообщает. |
+| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Заменяет точную подстроку. `old_string` должен встречаться ровно один раз, если не задан `replace_all`; `expected_sha256` защищает от перезаписи файла, изменившегося после чтения. |
+
+### Поиск
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `grep_search(pattern, path, glob, limit, ignore_case, fixed, context)` | Рекурсивно ищет по содержимому файлов, пропуская двоичные файлы и тяжёлые каталоги. `fixed` — поиск как по обычному тексту, `context` — строки вокруг совпадения, `limit` — 1–1000 (по умолчанию 200). |
+| `glob_find(pattern, path)` | Ищет файлы по маске (`*` и `**`). |
+
+### Долгие задачи
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `run_job(command, cwd)` | Запускает команду в фоне и возвращает `job_id`. |
+| `job_output(job_id, wait_ms, max_chars, cursor)` | Читает вывод задачи, при желании ожидая завершения до 20 с. Постранично. |
+| `job_kill(job_id, signal)` | Завершает задачу. `signal` — `TERM` (по умолчанию), `KILL`, `INT`, `HUP` или `QUIT`. |
+| `job_list(limit)` | Список последних задач, новые сверху (20 по умолчанию, максимум 50). |
+
+### Публикация файлов и веб-страниц
+
+Эти четыре делают что-то на вашей машине доступным из интернета. Ссылку отдаёт шлюз на общем домене, поэтому **узел должен оставаться подключённым**.
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `share_file(path, name, overwrite)` | Публикует **один файл**: он копируется в каталог публикаций узла, и вы получаете `https://<общий-домен>/<узел>/<имя>-<случайное>/<файл>`. `overwrite` заменяет публикацию с тем же именем. |
+| `serve_dir(path, name)` | Отдаёт **каталог** на месте — копия не создаётся. Если есть `index.html`, отдаётся он, иначе показывается список файлов. Только чтение (GET/HEAD). Возвращает `https://<общий-домен>/<узел>/<имя>-<случайное>/`. |
+| `share_list()` | Список активных публикаций: ссылки, корни и запущен ли локальный сервер. |
+| `unshare(name)` | Останавливает публикацию и отзывает ссылку. Принимает имя, slug или полную ссылку. Для файла удаляется и копия в каталоге публикаций; отдаваемый каталог на диске не трогается. |
+
+> [!IMPORTANT]
+> Случайная часть пути **и есть** пароль — любой, у кого есть ссылка, прочитает файл или просмотрит каталог. Относитесь к ссылке как к паролю и снимайте публикацию через `unshare`, когда она больше не нужна. Ограничения: 32 МиБ на файл по умолчанию, потолок 64 МиБ через `MESH_WEB_MAX_BYTES`.
+
+### Поведение агента
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `get_orchestration_skill()` | Загружает текущие рабочие правила агента и навык оркестрации. |
 
 > [!TIP]
 > Gemini даёт одному вызову инструмента около 30 секунд. Всё, что дольше (сборки, бэкапы, загрузки), агент запускает через `run_job` и забирает результат через `job_output` — задачи не обрываются.
