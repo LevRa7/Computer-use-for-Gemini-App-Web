@@ -90,6 +90,15 @@ curl -fsSL https://smart-server.online/install.sh | bash
 irm https://smart-server.online/install.ps1 | iex
 ```
 
+**🪟 Windows — visual installer** (from a clone or a release)
+
+```powershell
+.\install-gui.cmd
+```
+
+A WinForms wizard that mirrors the console installer's variants, switches language at
+runtime and shows the MCP link at the end — see [docs/GUI_INSTALLER.md](docs/GUI_INSTALLER.md).
+
 **📦 Node.js (any OS)**
 ```bash
 npx gemini-computer-use
@@ -128,6 +137,62 @@ That's it — Gemini is now an agent running on your machine. Repeat step 1 on o
 | **Gateway + tunnel** (recommended) | `./install.sh --quick` | Home PCs and laptops behind NAT — the mobile-agent scenario. |
 | **Remote over SSH** | `./install.sh --ssh=user@host` | Deploy a node onto a remote Linux server from your terminal. |
 | **Local standalone** | `./install.sh --mode=standalone --port=8096` | Pure localhost FastMCP server at `http://localhost:8096/sse`, no cloud relay. |
+
+On Windows the same variants are available in the visual installer (`.\install-gui.cmd`); local standalone stays console-only there (`.\install.ps1 -Mode standalone -Port 8096`).
+
+---
+
+## 🪟 Windows installation
+
+Windows already ships PowerShell 5.1, so there is nothing to prepare — no Python, no Node.js, no administrator rights. Both installers finish by putting the same MCP link on the clipboard.
+
+|  | Console installer | Visual installer |
+| :--- | :--- | :--- |
+| Start | `irm https://smart-server.online/install.ps1 \| iex` | `.\install-gui.cmd` |
+| Needs | nothing but PowerShell | a clone or an unpacked release — it drives `install.ps1`, `core/` and `install.sh` |
+| Variants | `-Mode tunnel` (default), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Quick setup, Custom setup, Remote over SSH |
+| Language | `-Lang en` / `-Lang ru` | switch in the window header, or `-Lang` |
+
+### Visual installer
+
+![Windows visual installer](docs/images/gui-welcome-en.png)
+
+- **Quick setup** (recommended) — node name = PC name, shared gateway domain, Windows autostart. The one to pick on a home PC or laptop.
+- **Custom setup** — your own node name, your own shared domain, optional token.
+- **Remote over SSH** — copy the node code to a Linux host and run `install.sh` there. Needs the Windows *OpenSSH Client* feature and key-based authentication; interactive password prompts are not supported.
+
+The first screen runs `install.ps1 -DryRun` and reports what it found — Python, `websockets`, the resolved gateway domain, the config directory, the autostart path — without changing anything. Before starting, the window shows the exact command it will run; during the run it streams the installer output; at the end it shows the MCP link with a copy button, the three-step Gemini instructions and the paths it created.
+
+Full details, screenshots and the SSH notes: [docs/GUI_INSTALLER.md](docs/GUI_INSTALLER.md).
+
+### What a Windows installation creates
+
+| Path | What it is |
+| :--- | :--- |
+| `%USERPROFILE%\.config\antigravity-mesh\agent.env` | `MESH_GATEWAY`, `MESH_USER`, `MESH_TOKEN` |
+| `…\Start Menu\Programs\Startup\antigravity-agent.vbs` | autostart entry, so the node comes back after a reboot |
+| `%USERPROFILE%\.config\antigravity-mesh\agent.log` | agent output, for when a silent autostart fails |
+
+### Language
+
+The visual installer starts in the language of your Windows language settings — the display language and the preferred-languages list are read from the registry — and falls back to English. `-Lang ru` / `-Lang en` overrides the detection. The switch in the window header changes every label immediately.
+
+### Troubleshooting
+
+- **"No gateway domain configured"** — this copy was not published with a domain. Pass one: use *Custom setup* in the wizard, or `.\install.ps1 -Gateway <shared-domain>`, or set `MESH_PUBLIC_URL`.
+- **Registration fails** — the installer stops *before* writing anything when the gateway cannot be reached. Check that the domain resolves, then retry with an explicit `-Gateway`.
+- **`python` opens the Microsoft Store** — that is the App Execution Alias, not an interpreter. Both installers resolve a real `python.exe` by full path and ignore the alias; if none is found they install Python 3.12 via `winget`.
+- **The node does not come back after a reboot** — read `%USERPROFILE%\.config\antigravity-mesh\agent.log`.
+
+### Standalone on Windows
+
+The wizard does not offer it; use the console installer:
+
+```powershell
+.\install.ps1 -Mode standalone -Port 8096
+```
+
+That starts a local-only FastMCP server at `http://localhost:8096/sse` and puts that URL on the clipboard.
 
 ---
 
@@ -292,6 +357,15 @@ curl -fsSL https://smart-server.online/install.sh | bash
 irm https://smart-server.online/install.ps1 | iex
 ```
 
+**🪟 Windows — визуальный установщик** (из клона или релиза)
+
+```powershell
+.\install-gui.cmd
+```
+
+Мастер на WinForms: те же варианты, что и в консольном установщике, переключение языка
+на ходу и готовая ссылка MCP в конце — см. [docs/GUI_INSTALLER.md](docs/GUI_INSTALLER.md).
+
 **📦 Node.js (любая ОС)**
 ```bash
 npx gemini-computer-use
@@ -330,6 +404,62 @@ https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ва�
 | **Шлюз + туннель** (рекомендуется) | `./install.sh --quick` | Домашние ПК и ноутбуки за NAT — сценарий мобильного агента. |
 | **Удалённо через SSH** | `./install.sh --ssh=user@host` | Развернуть узел на удалённом Linux-сервере прямо из терминала. |
 | **Локальный автономный** | `./install.sh --mode=standalone --port=8096` | Чисто локальный FastMCP-сервер на `http://localhost:8096/sse`, без облачного релея. |
+
+На Windows те же варианты есть в визуальном установщике (`.\install-gui.cmd`); локальный автономный режим там остаётся консольным (`.\install.ps1 -Mode standalone -Port 8096`).
+
+---
+
+## 🪟 Установка на Windows
+
+В Windows уже есть PowerShell 5.1, поэтому готовить ничего не нужно — ни Python, ни Node.js, ни права администратора. Оба установщика заканчивают одинаково: кладут ссылку MCP в буфер обмена.
+
+|  | Консольный установщик | Визуальный установщик |
+| :--- | :--- | :--- |
+| Запуск | `irm https://smart-server.online/install.ps1 \| iex` | `.\install-gui.cmd` |
+| Что нужно | только PowerShell | клон или распакованный релиз — он вызывает `install.ps1`, `core/` и `install.sh` |
+| Варианты | `-Mode tunnel` (по умолчанию), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Быстрая настройка, Кастомная настройка, Удалённо по SSH |
+| Язык | `-Lang en` / `-Lang ru` | переключатель в шапке окна или `-Lang` |
+
+### Визуальный установщик
+
+![Визуальный установщик для Windows](docs/images/gui-welcome-ru.png)
+
+- **Быстрая настройка** (рекомендуется) — имя узла = имя ПК, общий домен шлюза, автозапуск Windows. Это вариант для домашнего ПК или ноутбука.
+- **Кастомная настройка** — своё имя узла, свой общий домен, необязательный токен.
+- **Удалённо по SSH** — код узла копируется на Linux-хост, там запускается `install.sh`. Нужен компонент Windows *«Клиент OpenSSH»* и вход по ключу; ввод пароля не поддерживается.
+
+Первый экран запускает `install.ps1 -DryRun` и показывает, что найдено: Python, `websockets`, разрешённый домен шлюза, каталог конфигурации и путь автозапуска — ничего не меняя. Перед запуском окно показывает точную команду, во время установки — построчный вывод установщика, в конце — ссылку MCP с кнопкой копирования, инструкцию из трёх шагов и созданные пути.
+
+Подробности, снимки экрана и особенности SSH: [docs/GUI_INSTALLER.md](docs/GUI_INSTALLER.md).
+
+### Что создаётся при установке на Windows
+
+| Путь | Что это |
+| :--- | :--- |
+| `%USERPROFILE%\.config\antigravity-mesh\agent.env` | `MESH_GATEWAY`, `MESH_USER`, `MESH_TOKEN` |
+| `…\Start Menu\Programs\Startup\antigravity-agent.vbs` | запись автозапуска, чтобы узел поднимался после перезагрузки |
+| `%USERPROFILE%\.config\antigravity-mesh\agent.log` | вывод агента — на случай, если автозапуск молча не сработал |
+
+### Язык
+
+Визуальный установщик стартует на языке ваших языковых настроек Windows — язык интерфейса и список предпочитаемых языков читаются из реестра, — а если ничего не найдено, на английском. Флаг `-Lang ru` / `-Lang en` переопределяет автоопределение. Переключатель в шапке окна меняет все подписи сразу.
+
+### Если что-то не работает
+
+- **«Домен шлюза не задан»** — эта копия не была опубликована с доменом. Укажите его: режим *«Кастомная настройка»* в мастере, либо `.\install.ps1 -Gateway <общий-домен>`, либо переменная `MESH_PUBLIC_URL`.
+- **Регистрация не проходит** — установщик останавливается **до** записи файлов, если шлюз недоступен. Проверьте, что домен разрешается, и повторите с явным `-Gateway`.
+- **`python` открывает Microsoft Store** — это заглушка App Execution Alias, а не интерпретатор. Оба установщика находят настоящий `python.exe` по полному пути и заглушку игнорируют; если интерпретатора нет, ставят Python 3.12 через `winget`.
+- **Узел не поднимается после перезагрузки** — смотрите `%USERPROFILE%\.config\antigravity-mesh\agent.log`.
+
+### Автономный режим на Windows
+
+В мастере его нет, используйте консольный установщик:
+
+```powershell
+.\install.ps1 -Mode standalone -Port 8096
+```
+
+Он поднимает локальный FastMCP-сервер на `http://localhost:8096/sse` и кладёт эту ссылку в буфер обмена.
 
 ---
 

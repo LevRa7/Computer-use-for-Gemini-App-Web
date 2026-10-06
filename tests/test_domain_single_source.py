@@ -24,6 +24,9 @@ DEFAULT_HOST = domain.DEFAULT_PUBLIC_BASE_URL.split("//", 1)[-1].rstrip("/")
 NO_LITERAL_FILES = (
     "install.sh",
     "install.ps1",
+    "install-gui.ps1",
+    "install-gui.strings.json",
+    "install-gui.cmd",
     "deploy_gateway.sh",
     "ops/mesh-domain.sh",
     "ops/nginx/render-domain.sh",
