@@ -1,0 +1,58 @@
+# ==============================================================================
+#  Antigravity Mesh - the gateway's HTTPS vhost, as a template
+#
+#  Rendered by ops/nginx/render-domain.sh, which takes the domain from the one
+#  place that declares it (MESH_PUBLIC_URL, the domain file, or core/domain.py).
+#  Do not edit the rendered file on the host: edit this template and re-render,
+#  or the domain ends up in two places again.
+#
+#  Placeholders:
+#    __MESH_DOMAIN__     the public domain, e.g. mesh.example.com
+#    __MESH_CERT_NAME__  the certbot lineage name (usually the same as the domain)
+#
+#  Only the Mesh surface lives here. Other names that may share a host
+#  (api-agy., agy/, /v1/, ...) belong to other services and keep their own files.
+# ==============================================================================
+
+# HTTP -> HTTPS, plus the ACME path so certificate renewal keeps working.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __MESH_DOMAIN__;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS: the Mesh gateway itself.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name __MESH_DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__MESH_CERT_NAME__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__MESH_CERT_NAME__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # The installers, the node bootstrap payload and the public file shares.
+    include /etc/nginx/snippets/antigravity-mesh-mcp.conf;
+
+    # The MCP surface: SSE and Streamable HTTP stream, so buffering stays off.
+    location / {
+        proxy_pass http://127.0.0.1:8096;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+    }
+}

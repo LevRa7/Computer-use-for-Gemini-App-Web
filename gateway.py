@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 import datetime
 import hmac
@@ -69,12 +70,32 @@ BROADCAST_HTTP_RESPONSES = os.environ.get(
 #   SSE      https://<shared-domain>/sse?user=<node>&token=<token>
 #   HTTP     https://<shared-domain>/mcp?user=<node>&token=<token>
 #   Tunnel   wss://<shared-domain>/ws/tunnel?user=<node>&token=<token>
-# Override the shared domain with MESH_PUBLIC_URL (or AGY_PUBLIC_BASE_URL).
-PUBLIC_BASE_URL = (
-    os.environ.get("MESH_PUBLIC_URL")
-    or os.environ.get("AGY_PUBLIC_BASE_URL")
-    or "https://smart-server.online"
-).strip().rstrip("/")
+# Override the shared domain with MESH_PUBLIC_URL (or its AGY_PUBLIC_BASE_URL
+# alias), or with the domain file - core/domain.py owns that order and holds the
+# single default, so the domain is configured in exactly one place.
+try:
+    from core import domain as _domain
+except Exception:  # pragma: no cover - gateway.py installed without core/ beside it
+    _domain = None
+
+if _domain is not None:
+    PUBLIC_BASE_URL = _domain.public_base_url()
+else:
+    # gateway.py is sometimes installed on its own (for example
+    # /opt/antigravity-mesh/gateway.py with no core/ next to it). Shipping
+    # core/domain.py alongside it is part of the deployment; this branch only keeps
+    # the service starting when that was forgotten, and it refuses to invent a
+    # domain of its own - the project default lives in core/domain.py alone.
+    PUBLIC_BASE_URL = (
+        os.environ.get("MESH_PUBLIC_URL") or os.environ.get("AGY_PUBLIC_BASE_URL") or ""
+    ).strip().rstrip("/")
+    if not PUBLIC_BASE_URL:
+        logger.error(
+            "core/domain.py is not importable and neither MESH_PUBLIC_URL nor "
+            "AGY_PUBLIC_BASE_URL is set: the public domain is unknown, so URLs handed "
+            "to clients will be relative. Install core/domain.py next to gateway.py, or "
+            "set the domain in the domain file / environment."
+        )
 PUBLIC_HOST = urlparse(PUBLIC_BASE_URL).netloc or PUBLIC_BASE_URL
 
 # Legacy per-device subdomain resolution. Kept only so URLs handed out before the
@@ -428,7 +449,10 @@ async def api_register(request: Request):
                     "sse_url": public_url("/sse", u, token),
                     "tunnel_url": f"wss://{PUBLIC_HOST}/ws/tunnel?user={u}&token={token}",
                     "reused": True,
-                    "instructions": f"Antigravity Mesh node '{user}'. Direct access to the real remote host over a reverse tunnel. "
+                    # `u` is the loop variable above; `user` does not exist in this
+                    # branch, so every re-registration of an already-known MAC
+                    # raised NameError and the gateway answered HTTP 500.
+                    "instructions": f"Antigravity Mesh node '{u}'. Direct access to the real remote host over a reverse tunnel. "
                 f"Do not guess paths or outputs: use list_dir/glob_find/grep_search/read_file/bash_exec/"
                 f"system_vitals. Use run_job for slow commands; page output with max_chars+cursor."
                 })
@@ -941,7 +965,7 @@ async def messages_endpoint(request: Request):
                         "limit": {"type": "integer", "description": "How many jobs to return (1-50, default 20)"}
                     }, "required": []}
                 }
-            ]
+            ] + SHARE_TOOL_SPECS
         }
     elif method == "tools/call":
         name = params.get("name")
@@ -1150,6 +1174,49 @@ async def messages_endpoint(request: Request):
                             )
                         )
                     content_text = "\n".join(lines)
+        elif name in ("share_file", "serve_dir"):
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                content_text = (
+                    "Published. Public link: {url}\n"
+                    "Anyone with this link can read it - the random part of the path is the credential. "
+                    "Revoke it with unshare(name=\"{name}\") when it is no longer needed.\n"
+                    "Local URL on the node: {local}"
+                ).format(url=res.get("url", ""), name=res.get("name", ""),
+                         local=res.get("local_url", ""))
+        elif name == "share_list":
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                shares = res.get("shares") or []
+                if not shares:
+                    content_text = "No active shares."
+                else:
+                    lines = ["kind | name | url | running"]
+                    for item in shares:
+                        if isinstance(item, dict):
+                            lines.append("{kind} | {name} | {url} | {running}".format(
+                                kind=item.get("kind", ""), name=item.get("name", ""),
+                                url=item.get("url", ""), running=item.get("running")))
+                    content_text = "\n".join(lines)
+        elif name == "unshare":
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                content_text = (
+                    "Revoked share '{name}' ({slug}). Server stopped={stopped}, files removed={removed}."
+                ).format(name=res.get("name", ""), slug=res.get("slug", ""),
+                         stopped=res.get("server_stopped"), removed=res.get("files_removed"))
         else:
             resp["error"] = {"code": -32601, "message": f"Unknown tool: {name}"}
             broadcast_sse(user, resp)
@@ -1421,6 +1488,164 @@ async def ws_tunnel_endpoint(websocket: WebSocket):
         if active_tunnels.get(user, {}).get("ws") == websocket:
             active_tunnels.pop(user, None)
 
+
+# ---------------------------------------------------------------------------
+# Public file shares: GET/HEAD <shared-domain>/<node>/<name>-<secret>/...
+# ---------------------------------------------------------------------------
+# The node runs a loopback-only static server (core/web_share.py) and this route
+# relays the request over the existing tunnel; no port is ever opened on the
+# node. Only read methods are proxied, the 16-hex suffix is the share secret and
+# a node that is not connected fails fast with 503 instead of blocking on the
+# tunnel retry loop. The slug shape is duplicated from core/web_share.py on
+# purpose: the gateway deploys as a single file and must not import node code.
+SHARE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}-[0-9a-f]{16}$")
+SHARE_METHODS = ("GET", "HEAD")
+# The node is trusted, but a corrupted or buggy reply must not be able to inject
+# response headers. An allow-list (not a deny-list) also keeps a compromised node
+# from setting cookies on the shared domain or adding headers this route never
+# means to expose; control characters are stripped and values are forced through
+# latin-1, which is what Starlette encodes headers with.
+_RELAY_HEADERS = (
+    "content-type", "content-disposition", "last-modified", "etag",
+    "cache-control", "location", "accept-ranges", "content-length",
+)
+_HEADER_VALUE_RE = re.compile(r"[\x00-\x1f\x7f]")
+_CONTENT_LENGTH_RE = re.compile(r"^\d{1,12}$")
+
+
+def _relay_headers(raw) -> dict:
+    headers = {}
+    if not isinstance(raw, dict):
+        return headers
+    for key, value in raw.items():
+        name = str(key).strip().lower()
+        if name not in _RELAY_HEADERS:
+            continue
+        text = _HEADER_VALUE_RE.sub("", str(value))[:4096]
+        text = text.encode("latin-1", "replace").decode("latin-1")
+        if name == "location" and not text.startswith("/"):
+            continue  # a redirect must stay inside this domain's share namespace
+        headers[name] = text
+    return headers
+
+
+# Tool surface advertised for public shares. The gateway keeps its own static
+# tools/list (it must not import node code), so this list has to stay in step
+# with the node's core/mcp_tools.TOOLS; tests/test_gateway_share_route.py
+# compares the two surfaces to catch drift.
+SHARE_TOOL_SPECS = [
+    {
+        "name": "share_file",
+        "description": (
+            "Publish ONE local file on the internet through the gateway and return a public "
+            "HTTPS link (https://<domain>/<node>/<name>-<random>/<file>). Anyone with the link "
+            "can read it; revoke it with unshare when it is no longer needed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path of the local file to publish."},
+                "name": {"type": "string", "description": "Human name in the URL (default: file name)."},
+                "overwrite": {"type": "boolean", "description": "Replace an existing share with the same name."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "serve_dir",
+        "description": (
+            "Start a static web server for a local directory and return its public HTTPS link "
+            "(https://<domain>/<node>/<name>-<random>/). Served in place, read-only (GET/HEAD); "
+            "unshare stops it and the directory itself is never deleted."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Local directory to serve."},
+                "name": {"type": "string", "description": "Human name in the URL (default: directory name)."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "share_list",
+        "description": "List active public shares with their URLs and whether the local server is running.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "unshare",
+        "description": "Stop a public share and revoke its link (accepts the name, slug or full URL).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Share name, slug or public URL from share_list."},
+            },
+            "required": ["name"],
+        },
+    },
+]
+
+
+def _share_response(status: int, message: str, extra=None) -> Response:
+    headers = {"content-type": "text/plain; charset=utf-8", "cache-control": "no-store"}
+    if extra:
+        headers.update(extra)
+    return Response(message + "\n", status_code=status, headers=headers)
+
+async def public_share_endpoint(request: Request) -> Response:
+    """Relay one public share request to the node that owns it."""
+    user = (request.path_params.get("user") or "").strip().lower()
+    rest = (request.path_params.get("rest") or "").strip("/")
+    if not user or not rest:
+        return _share_response(404, "not found")
+    if user not in load_registry():
+        return _share_response(404, "not found")
+
+    slug, _, sub_path = rest.partition("/")
+    if not SHARE_SLUG_RE.match(slug):
+        return _share_response(404, "not found")
+
+    method = request.method.upper()
+    if method not in SHARE_METHODS:
+        return _share_response(405, "method not allowed", {"allow": "GET, HEAD"})
+    if user not in active_tunnels:
+        return _share_response(503, "node offline: the mesh agent on '%s' is not connected" % user)
+
+    result = await call_remote_tool(user, "_http_share", {
+        "slug": slug,
+        "path": "/" + sub_path,
+        "method": method,
+        "query": request.url.query or "",
+    })
+    if not isinstance(result, dict) or "status" not in result:
+        logger.warning("share relay for '%s' returned an invalid response: %r", user, result)
+        return _share_response(502, "bad gateway")
+    try:
+        status = int(result["status"])
+        body = base64.b64decode(result.get("body_b64") or "")
+    except Exception:
+        return _share_response(502, "bad gateway")
+    if not 200 <= status <= 599:
+        # 1xx is not a final response: h11 rejects it and the client gets no
+        # response at all, so a buggy node reply becomes a clean 502 instead.
+        return _share_response(502, "bad gateway")
+    headers = _relay_headers(result.get("headers"))
+    if status in (204, 304):
+        # These statuses must not carry a body or a Content-Length.
+        body = b""
+        headers.pop("content-length", None)
+    elif method == "HEAD":
+        # Keep the node's Content-Length - it describes the resource while the
+        # body is empty - but only a sane numeric value.
+        if not _CONTENT_LENGTH_RE.match(headers.get("content-length", "")):
+            headers.pop("content-length", None)
+    else:
+        # Never trust a declared length: a body that disagrees with
+        # Content-Length is a protocol error (h11 aborts the response).
+        headers["content-length"] = str(len(body))
+    return Response(content=body, status_code=status, headers=headers, media_type=None)
+
+
 routes = [
     Route("/", health, methods=["GET", "HEAD", "OPTIONS"]),
     Route("/health", health, methods=["GET", "HEAD", "OPTIONS"]),
@@ -1432,6 +1657,10 @@ routes = [
     Route("/mcp", mcp_unified_endpoint, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"]),
     Route("/messages", mcp_unified_endpoint, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"]),
     WebSocketRoute("/ws/tunnel", ws_tunnel_endpoint),
+    # Public file shares. MUST stay last: it is a catch-all for two-segment
+    # paths and must never shadow /sse, /mcp, /health, /api/register or the
+    # WebSocket tunnel above.
+    Route("/{user}/{rest:path}", public_share_endpoint, methods=["GET", "HEAD", "OPTIONS"]),
 ]
 
 middleware = [

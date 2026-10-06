@@ -4,6 +4,18 @@ import json
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
+
+def _index_key(path: str) -> str:
+    """Canonical, platform-stable key for a file inside the index.
+
+    ``os.path.normpath`` returns backslashes on Windows, so the same repository
+    produced ``core\\schemas.py`` there and ``core/schemas.py`` on Linux: the
+    cache written on one platform did not match on the other and symbols were
+    reported with a separator the model could not paste back into a command.
+    Forward slashes work for every Windows API too, so they are used everywhere.
+    """
+    return os.path.normpath(path).replace("\\", "/")
+
 class CodeSymbol(BaseModel):
     name: str
     kind: str  # "class", "function", "async_function"
@@ -132,7 +144,7 @@ class CodeIndex:
             for file in files:
                 if not file.endswith(".py"):
                     continue
-                file_path = os.path.normpath(os.path.join(root, file))
+                file_path = _index_key(os.path.join(root, file))
                 current_seen.add(file_path)
                 total_files += 1
 
@@ -182,14 +194,14 @@ class CodeIndex:
         return matches
 
     def get_file_outline(self, file_path: str) -> List[CodeSymbol]:
-        norm = os.path.normpath(file_path)
+        norm = _index_key(file_path)
         for path, entry in self.files.items():
             if norm == path or norm.endswith(path) or path.endswith(norm):
                 return entry.symbols
         return []
 
     def get_cached_chunk(self, file_path: str, start_line: int = 1, end_line: int = 100) -> str:
-        norm = os.path.normpath(file_path)
+        norm = _index_key(file_path)
         try:
             stat = os.stat(norm)
             mtime = stat.st_mtime

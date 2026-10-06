@@ -172,6 +172,16 @@ MESH_GATEWAY_SSH=root@<gateway-ip> MESH_GATEWAY_SSH_PASS_FILE=~/.ssh/gw-pass \
 ```
 It verifies every upload with an sha256 manifest on the host, takes a timestamped backup, installs with the right owner, restarts the service and finishes with a public health check. Nothing is installed if verification fails.
 
+> [!TIP]
+> **One place for the domain.** `MESH_PUBLIC_URL` in `domain.env`
+> (`/etc/antigravity-mesh/domain.env` on Linux, `%USERPROFILE%\.config\antigravity-mesh\domain.env`
+> on Windows) is the only setting that names it: the node, the gateway, the installers, the public
+> file links and the nginx vhosts all resolve it through `core/domain.py`. Switching domains is one
+> value plus `ops/nginx/render-domain.sh --apply` — see [docs/DOMAIN.md](docs/DOMAIN.md).
+
+> [!IMPORTANT]
+> **`install.ps1` encoding — one file, two representations.** The repository copy is UTF-8 *with* a BOM: Windows PowerShell 5.1 decodes a BOM-less script with the ANSI code page, the Russian strings then turn into smart quotes and the parser rejects the whole file, so `.\install.ps1` from a clone would not run. The copy the gateway serves is written *without* the BOM by `deploy_gateway.sh`, because `irm … | iex` receives the BOM as part of the first token and `param(...)` then stops being the first statement. nginx declares `charset utf-8` for that location, so the BOM-less copy still decodes correctly. Please keep both properties when editing the file.
+
 **TLS certificate policy — one name, no per-device SANs.** The certificate must cover the shared domain only; a node is selected by `?user=`, never by a hostname:
 
 ```bash
@@ -361,6 +371,16 @@ MESH_GATEWAY_SSH=root@<ip-шлюза> ./deploy_gateway.sh            # заде�
 MESH_GATEWAY_SSH=root@<ip-шлюза> ./deploy_gateway.sh --dry-run  # предпросмотр
 ```
 Скрипт проверяет каждую загрузку манифестом sha256 на хосте, делает бэкап с меткой времени, ставит файлы с нужным владельцем, перезапускает службу и завершает публичной проверкой здоровья. При несовпадении хэшей ничего не устанавливается.
+
+> [!TIP]
+> **Домен задаётся в одном месте.** `MESH_PUBLIC_URL` в `domain.env`
+> (`/etc/antigravity-mesh/domain.env` в Linux, `%USERPROFILE%\.config\antigravity-mesh\domain.env`
+> в Windows) — единственная настройка, где он назван: узел, шлюз, установщики, публичные ссылки
+> на файлы и конфиги nginx берут его через `core/domain.py`. Смена домена — это одно значение и
+> `ops/nginx/render-domain.sh --apply`, подробности в [docs/DOMAIN.md](docs/DOMAIN.md).
+
+> [!IMPORTANT]
+> **Кодировка `install.ps1` — один файл, два представления.** В репозитории файл лежит в UTF-8 *с* меткой BOM: Windows PowerShell 5.1 читает скрипт без метки в ANSI-кодировке, русский текст превращается в «умные кавычки», и парсер отвергает файл целиком — то есть `.\install.ps1` из клона просто не запустится. Копию, которую отдаёт шлюз, `deploy_gateway.sh` записывает *без* метки: `irm … | iex` получает метку как часть первого токена, и `param(...)` перестаёт быть первым оператором. Для этого адреса nginx объявляет `charset utf-8`, поэтому копия без метки читается корректно. Пожалуйста, сохраняйте оба свойства при правке файла.
 
 **Политика TLS-сертификата: только общий домен, без SAN на устройства.** Имена узлов в сертификат не добавляются никогда — узел выбирается `?user=`:
 

@@ -38,12 +38,14 @@ import json
 import logging
 import os
 import random
+import socket
 import sys
 import time
+from typing import Optional
 
 import websockets
 
-from core import mcp_tools
+from core import domain, mcp_tools
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("agy-agent")
@@ -59,19 +61,47 @@ UNAUTHORIZED_BACKOFF = 60.0
 
 
 def read_env_file(path: str) -> dict:
-    """Parse a KEY=VALUE file; tolerates a UTF-8 BOM (Windows PowerShell 5 writes one)."""
-    values = {}
+    """Parse a KEY=VALUE file; tolerates a UTF-8 BOM (Windows PowerShell 5 writes one).
+
+    The implementation lives in :mod:`core.domain`, which reads ``domain.env`` with
+    the same rules; it is re-exported here so existing importers of
+    ``core.agent.read_env_file`` keep working and the project keeps exactly one
+    parser.
+    """
+    return domain.read_env_file(path)
+
+
+def default_node_name() -> str:
+    """Node name used when ``MESH_USER`` is not configured: the machine's name.
+
+    This used to be a personal nickname, so every node that did not set
+    ``MESH_USER`` claimed that *same* name on the shared gateway - and the gateway
+    keeps exactly one tunnel per name, evicting the previous one. Two unrelated
+    users would therefore knock each other offline in an endless loop, which is
+    precisely the flapping the instance lock exists to prevent (and that lock is
+    per machine, so it cannot help across machines). The installers already
+    register the sanitised hostname, so the agent now agrees with them.
+    """
     try:
-        with open(path, "r", encoding="utf-8-sig") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                values[key.strip()] = value.strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return values
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = ""
+    safe = "".join(c for c in hostname.strip().lower() if c.isalnum() or c in "-_")
+    return safe or "node"
+
+
+def configuration_error() -> Optional[str]:
+    """Human-readable reason this node cannot connect, or None when it is usable.
+
+    An empty token is not a transient link failure: the gateway rejects the node
+    on every attempt, so retrying forever only fills agent.log and leaves a
+    broken autostart behind. The caller reports this and stops.
+    """
+    if not TOKEN:
+        return ("MESH_TOKEN is empty (environment and %s). The gateway rejects a node "
+                "without a token, so the tunnel cannot work - re-run the installer."
+                % (os.environ.get("MESH_CONFIG_FILE") or DEFAULT_CONFIG_FILE))
+    return None
 
 
 def _load_settings() -> dict:
@@ -90,8 +120,12 @@ def _load_settings() -> dict:
             os.environ[key] = value
 
     return {
-        "gateway": pick("MESH_GATEWAY", "smart-server.online"),
-        "user": pick("MESH_USER", "levra7"),
+        # The host the node dials. core.domain owns the order: the configured
+        # public domain (MESH_PUBLIC_URL, or domain.env) wins, and the legacy
+        # MESH_GATEWAY - which the loop above has just exported from agent.env - is
+        # only consulted while nothing else names a domain.
+        "gateway": domain.gateway_host(),
+        "user": pick("MESH_USER", default_node_name()),
         "token": pick("MESH_TOKEN", ""),
     }
 
@@ -117,6 +151,17 @@ def configure_from_env() -> None:
         write_roots=write_roots,
         jobs_dir=jobs_dir,
         max_output_chars=max_chars,
+        # Public shares: the node name in a share link must be the name this
+        # tunnel registers with the gateway (the gateway routes
+        # /<node>/<slug>/... back to that tunnel), so it is passed explicitly
+        # rather than left to web_share's MESH_USER fallback - which would say
+        # "anonymous" whenever the operator relied on the hostname default.
+        # ``public_url`` is not passed here: core/domain.py owns the domain.
+        web_dir=os.environ.get("MESH_WEB_DIR") or None,
+        mesh_user=USER,
+        max_share_bytes=os.environ.get("MESH_WEB_MAX_BYTES"),
+        max_shares=os.environ.get("MESH_WEB_MAX_SHARES"),
+        web_listing=os.environ.get("MESH_WEB_LISTING"),
     )
 
 
@@ -224,6 +269,25 @@ def _is_unauthorized(exc: BaseException) -> bool:
     return status in (401, 403)
 
 
+def _looks_like_dns_failure(exc: BaseException) -> bool:
+    """True when the connection failed because the gateway name did not resolve.
+
+    A wrong or dead gateway domain produced an endless stream of generic
+    "Connection lost" lines, which reads like a network outage. Naming the cause
+    once is the difference between a five-minute fix and a long hunt.
+    """
+    if isinstance(exc, socket.gaierror):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in (
+        "name or service not known",       # Linux getaddrinfo
+        "nodename nor servname",           # BSD / macOS
+        "getaddrinfo failed",              # Windows
+        "temporary failure in name resolution",
+        "no address associated with hostname",
+    ))
+
+
 def tunnel_uri() -> str:
     """Canonical tunnel URL: one shared domain, node selected by ?user=."""
     base = GATEWAY_HOST.rstrip("/")
@@ -275,6 +339,11 @@ async def run_agent():
                 delay = UNAUTHORIZED_BACKOFF
                 logger.error("Gateway rejected node '%s' (4001 Unauthorized): the token is wrong or the "
                              "node was removed. Re-run the installer. Retrying in %.0fs.", USER, delay)
+            elif _looks_like_dns_failure(e):
+                delay = min(backoff, MAX_BACKOFF) + random.uniform(0, 0.5)
+                logger.error("Gateway '%s' does not resolve (%s). Check the gateway name (MESH_GATEWAY) "
+                             "and this machine's DNS. Retrying in %.0fs.", GATEWAY_HOST, e, delay)
+                backoff = min(backoff * 2, MAX_BACKOFF)
             else:
                 delay = min(backoff, MAX_BACKOFF) + random.uniform(0, 0.5)
                 logger.warning(f"Connection lost: {e}. Reconnecting in {delay:.1f}s...")
@@ -283,6 +352,12 @@ async def run_agent():
 
 
 def main() -> None:
+    # Fail fast on a configuration that can never work, instead of retrying the
+    # gateway every 60 seconds forever from a Windows Startup launcher.
+    problem = configuration_error()
+    if problem:
+        logger.error("%s Refusing to start.", problem)
+        sys.exit(2)
     _lock = wait_for_instance_lock(USER)  # held for the life of the process
     try:
         asyncio.run(run_agent())

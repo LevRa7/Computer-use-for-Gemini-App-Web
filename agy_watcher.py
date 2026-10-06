@@ -25,6 +25,10 @@ from pathlib import Path
 
 from gdrive_client import GDriveClient, DEFAULT_FILE_ID, GEMINI_REMOTE_FOLDER_ID
 
+# The public domain comes from core/domain.py - the single place that resolves it -
+# instead of this module reading AGY_PUBLIC_BASE_URL on its own.
+from core import domain
+
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "agy_watcher.log"
 METRICS_FILE = BASE_DIR / "task_metrics.json"
@@ -407,10 +411,13 @@ def process_single_task(task: dict, data: dict, file_id: str, agy_bin: str, clie
     live_dir.mkdir(parents=True, exist_ok=True)
     live_log_file = live_dir / f"{task_id}.log"
     live_meta_file = live_dir / f"{task_id}.json"
-    public_base_url = os.environ.get("AGY_PUBLIC_BASE_URL", "").strip().rstrip("/")
-    if not public_base_url:
-        logger.warning("AGY_PUBLIC_BASE_URL is not set; live log links use the <your-domain> placeholder.")
-        public_base_url = "https://<your-domain>"
+    public_base_url = domain.public_base_url()
+    if not domain.is_explicit():
+        logger.warning(
+            "No public domain is configured (set MESH_PUBLIC_URL in %s, or in the "
+            "environment); live log links use the project default %s.",
+            domain.domain_file(), public_base_url,
+        )
     live_url = f"{public_base_url}/api/agy/live/{task_id}"
 
     created_at_str = task.get("created_at")
