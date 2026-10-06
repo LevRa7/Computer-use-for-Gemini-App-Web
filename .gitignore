@@ -17,3 +17,9 @@ registry.json
 # gateway.py is the deployed cloud gateway source (also mirrored to the VPS).
 # It is tracked on purpose: without it the published repo cannot run a gateway.
 # Never commit registry.json or *.env next to it - those hold live tokens.
+# Build output of build-installer-exe.ps1: the executable is published as a
+# release asset, not committed.
+dist/
+.verify-temp/
+.verify-payload/
+.pytest-tmp/

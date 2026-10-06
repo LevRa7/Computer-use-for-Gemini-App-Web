@@ -27,6 +27,8 @@ NO_LITERAL_FILES = (
     "install-gui.ps1",
     "install-gui.strings.json",
     "install-gui.cmd",
+    "build-installer-exe.ps1",
+    "tools/installer-exe/Launcher.cs",
     "deploy_gateway.sh",
     "ops/mesh-domain.sh",
     "ops/nginx/render-domain.sh",
@@ -85,8 +87,12 @@ def test_the_default_is_declared_exactly_once_in_python():
     """Only core/domain.py may name the default; everything else asks it."""
     offenders = []
     for root, dirs, files in os.walk(REPO):
+        # Every dot-directory is a local or build artifact (.git, .win-test-deps,
+        # .pytest-tmp, an unpacked installer payload) and may hold a copy of
+        # core/domain.py; only tracked source is audited.
         dirs[:] = [d for d in dirs if d not in
-                   {".git", "__pycache__", ".win-test-deps", "node_modules", "live_logs", "docs", "tests"}]
+                   {"__pycache__", "node_modules", "live_logs", "docs", "tests", "dist"}
+                   and not d.startswith(".")]
         for name in files:
             if not name.endswith(".py"):
                 continue

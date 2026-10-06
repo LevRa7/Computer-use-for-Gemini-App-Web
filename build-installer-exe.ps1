@@ -1,0 +1,220 @@
+# ==============================================================================
+#  Antigravity Mesh - build the single-file Windows setup executable
+#
+#  Produces dist\AntigravityMesh-Setup-<version>.exe: a compiled launcher with the
+#  whole node payload embedded, so one downloadable file installs a node.
+#
+#  It uses only what Windows already has - the in-box C# compiler from .NET
+#  Framework 4.x and Compress-Archive - so the build needs no SDK, no NuGet and no
+#  network access.
+#
+#  This file is deliberately ASCII-only: Windows PowerShell 5.1 reads a BOM-less
+#  script with the ANSI code page, and install.ps1 documents what that does to
+#  Russian text.
+#
+#  Usage:
+#     .\build-installer-exe.ps1
+#     .\build-installer-exe.ps1 -OutputDir C:\out
+# ==============================================================================
+[CmdletBinding()]
+param(
+    [string]$OutputDir = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+$repo = $PSScriptRoot
+if (-not $repo) { $repo = (Get-Location).Path }
+
+if (-not $OutputDir) { $OutputDir = Join-Path $repo 'dist' }
+
+# --- what goes inside the executable -----------------------------------------
+# install-gui.ps1 is the entry point; install.ps1 is the actual installer; core/
+# is what the node runs and what the SSH variant ships; skills/ travels with it.
+$PAYLOAD = @(
+    'install-gui.ps1',
+    'install-gui.strings.json',
+    'install.ps1',
+    'install.sh',
+    'core',
+    'skills'
+)
+
+function Write-Step {
+    param([string]$Text)
+    Write-Host ("  " + $Text)
+}
+
+Write-Host 'Antigravity Mesh - building the setup executable'
+Write-Host ''
+
+# --- 1. version, from the one place that declares it --------------------------
+$packagePath = Join-Path $repo 'package.json'
+$package = Get-Content -LiteralPath $packagePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$version = [string]$package.version
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw ("package.json version is not MAJOR.MINOR.PATCH: '" + $version + "'")
+}
+Write-Step ("version      : " + $version)
+
+# --- 2. the in-box compiler ---------------------------------------------------
+$csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path -LiteralPath $csc)) {
+    $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+}
+if (-not (Test-Path -LiteralPath $csc)) {
+    throw 'csc.exe was not found. It ships with .NET Framework 4.x, which is part of Windows.'
+}
+Write-Step ("compiler     : " + $csc)
+
+$launcher = Join-Path $repo 'tools\installer-exe\Launcher.cs'
+if (-not (Test-Path -LiteralPath $launcher)) { throw ("launcher source not found: " + $launcher) }
+
+# --- 3. stage ------------------------------------------------------------------
+$stage = Join-Path $env:TEMP ('mesh-exe-' + [Guid]::NewGuid().ToString('N'))
+[void](New-Item -ItemType Directory -Path $stage -Force)
+Write-Step ("staging      : " + $stage)
+
+try {
+    # --- 4. the payload, as one zip ------------------------------------------
+    $sources = @()
+    foreach ($item in $PAYLOAD) {
+        $path = Join-Path $repo $item
+        if (-not (Test-Path -LiteralPath $path)) { throw ("payload item missing: " + $path) }
+        $sources += $path
+    }
+    $payloadZip = Join-Path $stage 'payload.zip'
+    Compress-Archive -Path $sources -DestinationPath $payloadZip -CompressionLevel Optimal -Force
+    $payloadSize = (Get-Item -LiteralPath $payloadZip).Length
+    Write-Step ("payload      : " + $PAYLOAD.Count + " items, " + [Math]::Round($payloadSize / 1KB, 1) + " KB zipped")
+
+    # --- 5. assembly identity -------------------------------------------------
+    $assemblyInfo = Join-Path $stage 'VersionInfo.cs'
+    $lines = @(
+        'using System.Reflection;',
+        'using System.Runtime.InteropServices;',
+        '',
+        '[assembly: AssemblyTitle("Antigravity Mesh Setup")]',
+        '[assembly: AssemblyProduct("Antigravity Mesh")]',
+        '[assembly: AssemblyDescription("Visual installer for an Antigravity Mesh node")]',
+        '[assembly: AssemblyCompany("LevRa7")]',
+        '[assembly: AssemblyCopyright("MIT License")]',
+        ('[assembly: AssemblyVersion("' + $version + '.0")]'),
+        ('[assembly: AssemblyFileVersion("' + $version + '.0")]'),
+        '[assembly: ComVisible(false)]'
+    )
+    Set-Content -LiteralPath $assemblyInfo -Value $lines -Encoding ASCII
+
+    # --- 6. icon -------------------------------------------------------------
+    # Drawn at build time so no binary blob has to live in the repository.
+    $iconPath = Join-Path $stage 'app.ico'
+    $iconOk = $false
+    try {
+        Add-Type -AssemblyName System.Drawing
+        $size = 32
+        $bitmap = New-Object System.Drawing.Bitmap $size, $size
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+
+        $radius = 7
+        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $path.AddArc(0, 0, $radius, $radius, 180, 90)
+        $path.AddArc($size - $radius - 1, 0, $radius, $radius, 270, 90)
+        $path.AddArc($size - $radius - 1, $size - $radius - 1, $radius, $radius, 0, 90)
+        $path.AddArc(0, $size - $radius - 1, $radius, $radius, 90, 90)
+        $path.CloseFigure()
+
+        $background = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.Point 0, 0),
+            (New-Object System.Drawing.Point $size, $size),
+            [System.Drawing.Color]::FromArgb(56, 132, 232),
+            [System.Drawing.Color]::FromArgb(18, 62, 150))
+        $graphics.FillPath($background, $path)
+
+        # A small mesh: three nodes joined by links.
+        $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(235, 245, 255)), 1.6
+        $nodes = @(
+            (New-Object System.Drawing.PointF 16, 8),
+            (New-Object System.Drawing.PointF 9, 22),
+            (New-Object System.Drawing.PointF 23, 22)
+        )
+        $graphics.DrawLine($pen, $nodes[0], $nodes[1])
+        $graphics.DrawLine($pen, $nodes[0], $nodes[2])
+        $graphics.DrawLine($pen, $nodes[1], $nodes[2])
+        $dot = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+        foreach ($node in $nodes) {
+            $graphics.FillEllipse($dot, ($node.X - 2.6), ($node.Y - 2.6), 5.2, 5.2)
+        }
+        $graphics.Dispose()
+
+        $icon = [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
+        $stream = [System.IO.File]::Create($iconPath)
+        $icon.Save($stream)
+        $stream.Close()
+        $icon.Dispose()
+        $bitmap.Dispose()
+        $iconOk = $true
+        Write-Step 'icon         : generated'
+    } catch {
+        Write-Step ("icon         : skipped (" + $_.Exception.Message + ")")
+    }
+
+    # --- 7. compile ----------------------------------------------------------
+    if (-not (Test-Path -LiteralPath $OutputDir)) {
+        [void](New-Item -ItemType Directory -Path $OutputDir -Force)
+    }
+    $exeName = 'AntigravityMesh-Setup-' + $version + '.exe'
+    $exePath = Join-Path $OutputDir $exeName
+    if (Test-Path -LiteralPath $exePath) { Remove-Item -LiteralPath $exePath -Force }
+
+    $cscArgs = @(
+        '/nologo',
+        '/target:winexe',
+        '/platform:anycpu',
+        '/optimize+',
+        ('/out:' + $exePath),
+        '/reference:System.dll',
+        '/reference:System.Windows.Forms.dll',
+        '/reference:System.Drawing.dll',
+        '/reference:System.IO.Compression.dll',
+        '/reference:System.IO.Compression.FileSystem.dll',
+        ('/resource:' + $payloadZip + ',payload.zip')
+    )
+    if ($iconOk) { $cscArgs += ('/win32icon:' + $iconPath) }
+    $cscArgs += $launcher
+    $cscArgs += $assemblyInfo
+
+    $compilerOutput = & $csc $cscArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        foreach ($line in @($compilerOutput)) { Write-Host ("    " + $line) }
+        throw ('csc failed with exit code ' + $LASTEXITCODE)
+    }
+    foreach ($line in @($compilerOutput)) {
+        if ("$line".Trim()) { Write-Host ("    " + "$line".Trim()) }
+    }
+
+    if (-not (Test-Path -LiteralPath $exePath)) { throw 'the compiler reported success but produced no file' }
+
+    $exeSize = (Get-Item -LiteralPath $exePath).Length
+    $hash = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLower()
+    Set-Content -LiteralPath ($exePath + '.sha256') -Value ($hash + '  ' + $exeName) -Encoding ASCII
+
+    Write-Host ''
+    Write-Host 'Built:'
+    Write-Step ("file         : " + $exePath)
+    Write-Step ("size         : " + [Math]::Round($exeSize / 1KB, 1) + " KB")
+    Write-Step ("sha256       : " + $hash)
+    Write-Host ''
+    Write-Host 'Next:'
+    Write-Step ('.\' + $exeName + ' --version')
+    Write-Step ('.\' + $exeName + ' -SelfTest')
+    Write-Host ''
+    Write-Host 'Publish it as a release asset with:'
+    Write-Step ('gh release upload v' + $version + ' "' + $exePath + '" --repo LevRa7/Computer-use-for-Gemini-App-Web --clobber')
+}
+finally {
+    if (Test-Path -LiteralPath $stage) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

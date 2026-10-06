@@ -153,6 +153,27 @@ Windows already ships PowerShell 5.1, so there is nothing to prepare — no Pyth
 | Variants | `-Mode tunnel` (default), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Quick setup, Custom setup, Remote over SSH |
 | Language | `-Lang en` / `-Lang ru` | switch in the window header, or `-Lang` |
 
+### Download the setup executable
+
+The release also ships a single compiled installer, for machines where you would rather
+not clone or download anything else — `AntigravityMesh-Setup-<version>.exe`:
+
+```powershell
+.\AntigravityMesh-Setup-0.2.6.exe            # open the visual installer
+.\AntigravityMesh-Setup-0.2.6.exe -Lang ru   # start in Russian
+.\AntigravityMesh-Setup-0.2.6.exe -SelfTest  # headless self-check, prints JSON
+.\AntigravityMesh-Setup-0.2.6.exe --version  # print the version
+```
+
+It carries the wizard, `install.ps1`, `core/` and `install.sh` inside itself, unpacks them
+to `%LOCALAPPDATA%\AntigravityMesh\setup\<version>` (override with `MESH_SETUP_DIR`) and
+runs the wizard from there. It needs nothing but the .NET Framework and PowerShell that
+Windows already has, and it is built from this repository by
+`.\build-installer-exe.ps1` — no SDK, no NuGet, no network.
+
+It is **not code-signed**, so SmartScreen may ask for confirmation the first time you run
+it.
+
 ### Visual installer
 
 ![Windows visual installer](docs/images/gui-welcome-en.png)
@@ -419,6 +440,27 @@ https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ва�
 | Что нужно | только PowerShell | клон или распакованный релиз — он вызывает `install.ps1`, `core/` и `install.sh` |
 | Варианты | `-Mode tunnel` (по умолчанию), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Быстрая настройка, Кастомная настройка, Удалённо по SSH |
 | Язык | `-Lang en` / `-Lang ru` | переключатель в шапке окна или `-Lang` |
+
+### Готовый .exe установщика
+
+В релизе есть один собранный установщик — `AntigravityMesh-Setup-<версия>.exe`, для машин,
+где не хочется ничего клонировать:
+
+```powershell
+.\AntigravityMesh-Setup-0.2.6.exe            # открыть визуальный установщик
+.\AntigravityMesh-Setup-0.2.6.exe -Lang ru   # начать на русском
+.\AntigravityMesh-Setup-0.2.6.exe -SelfTest  # самопроверка без окна, печатает JSON
+.\AntigravityMesh-Setup-0.2.6.exe --version  # показать версию
+```
+
+Внутри него лежат мастер, `install.ps1`, `core/` и `install.sh`; он распаковывает их в
+`%LOCALAPPDATA%\AntigravityMesh\setup\<версия>` (можно переопределить переменной
+`MESH_SETUP_DIR`) и запускает мастера оттуда. Ему нужны только .NET Framework и
+PowerShell, которые в Windows уже есть, а собирается он из этого же репозитория скриптом
+`.\build-installer-exe.ps1` — без SDK, без NuGet и без сети.
+
+Файл **не подписан**, поэтому SmartScreen при первом запуске может попросить
+подтверждение.
 
 ### Визуальный установщик
 

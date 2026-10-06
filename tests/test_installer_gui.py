@@ -23,6 +23,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUI_SCRIPT = os.path.join(REPO, "install-gui.ps1")
 GUI_STRINGS = os.path.join(REPO, "install-gui.strings.json")
 GUI_LAUNCHER = os.path.join(REPO, "install-gui.cmd")
+BUILD_SCRIPT = os.path.join(REPO, "build-installer-exe.ps1")
+PACKAGE_JSON = os.path.join(REPO, "package.json")
 
 needs_windows = pytest.mark.skipif(
     os.name != "nt", reason="the visual installer is a Windows-only WinForms wizard"
@@ -236,3 +238,84 @@ def test_detection_reads_the_user_language_list_not_only_the_process_culture():
     signals = _field(detail, "signals")
     assert signals, "the detection reported no signals at all: %s" % detail
     assert "detected=" in detail, detail
+
+
+# ---------------------------------------------------------------------------
+# The compiled single-file installer
+# ---------------------------------------------------------------------------
+
+def _package_version():
+    with open(PACKAGE_JSON, "r", encoding="utf-8") as handle:
+        return json.load(handle)["version"]
+
+
+@pytest.fixture(scope="module")
+def setup_exe(tmp_path_factory):
+    """Build the executable once for this module.
+
+    The build uses only what Windows already has - the in-box csc.exe from .NET
+    Framework 4.x and Compress-Archive - so it needs no SDK and no network.
+    """
+    output_dir = tmp_path_factory.mktemp("dist")
+    build = subprocess.run(
+        [_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", BUILD_SCRIPT,
+         "-OutputDir", str(output_dir)],
+        capture_output=True, text=True, timeout=900,
+    )
+    assert build.returncode == 0, (build.stdout or "") + (build.stderr or "")
+
+    exe = output_dir / ("AntigravityMesh-Setup-%s.exe" % _package_version())
+    assert exe.exists(), "the build produced no executable; it made %s" % sorted(
+        item.name for item in output_dir.iterdir())
+    return exe
+
+
+@needs_windows
+def test_setup_exe_runs_the_wizard_self_test(setup_exe, tmp_path):
+    """The compiled installer must unpack its payload and run the wizard.
+
+    It is a launcher: it carries install-gui.ps1, install.ps1, core/ and
+    install.sh as one embedded zip, unpacks them and runs the wizard from there.
+    This also checks that the payload survives packing - install-gui.ps1 has to
+    stay pure ASCII and the string table has to stay valid UTF-8.
+    """
+    # Keep every path the executable touches inside tmp_path: a test must not
+    # write to the real user profile.
+    payload_dir = tmp_path / "payload"
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    environment = dict(os.environ)
+    environment["MESH_SETUP_DIR"] = str(payload_dir)
+    environment["TEMP"] = str(temp_dir)
+    environment["TMP"] = str(temp_dir)
+
+    # cmd.exe waits for a GUI application; PowerShell returns immediately.
+    run = subprocess.run(
+        [environment.get("ComSpec", "cmd.exe"), "/c", str(setup_exe), "-SelfTest"],
+        capture_output=True, text=True, env=environment, timeout=900,
+    )
+    output = run.stdout or ""
+    start = output.find("{")
+    assert start >= 0, "the executable printed no self-test report:\n%s\n%s" % (output, run.stderr)
+    report = json.loads(output[start:])
+    failures = [item for item in report["results"] if not item["pass"]]
+    assert report["ok"] is True, "self-test failures: %s" % json.dumps(failures, ensure_ascii=False)
+    assert run.returncode == 0, run.stderr
+
+    script = (payload_dir / "install-gui.ps1").read_bytes()
+    assert all(byte < 128 for byte in script), "install-gui.ps1 lost its ASCII-only property"
+    document = json.loads((payload_dir / "install-gui.strings.json").read_text(encoding="utf-8"))
+    assert set(document) >= {"en", "ru"}, "the string table did not survive packing"
+    assert (payload_dir / "core" / "agent.py").exists(), "core/ did not survive packing"
+    assert (payload_dir / "install.sh").exists(), "install.sh did not survive packing"
+
+
+@needs_windows
+def test_setup_exe_reports_its_version(setup_exe):
+    """--version answers without a console and without unpacking anything."""
+    run = subprocess.run(
+        [os.environ.get("ComSpec", "cmd.exe"), "/c", str(setup_exe), "--version"],
+        capture_output=True, text=True, timeout=300,
+    )
+    assert run.returncode == 0, run.stderr
+    assert _package_version() in (run.stdout or ""), run.stdout
