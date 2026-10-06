@@ -80,10 +80,11 @@ MIN_MAX_BYTES = 1024
 #: Default public payload limit. The body travels through the tunnel as one
 #: base64 JSON message, which grows it by ~4/3 plus framing, so the default must
 #: stay well below the gateway's websocket message cap (uvicorn's ws_max_size,
-#: raised to 64 MiB in gateway.py). 8 MiB -> ~10.7 MiB on the wire.
-DEFAULT_MAX_BYTES = 8 * 1024 * 1024
-#: Hard ceiling: 32 MiB -> ~42.7 MiB on the wire, safely under the 64 MiB cap.
-MAX_MAX_BYTES = 32 * 1024 * 1024
+#: raised to 128 MiB in gateway.py). 32 MiB -> ~42.7 MiB on the wire.
+DEFAULT_MAX_BYTES = 32 * 1024 * 1024
+#: Hard ceiling: 64 MiB -> ~85.3 MiB on the wire, safely under the 128 MiB cap.
+#: Operators raise the per-node limit with MESH_WEB_MAX_BYTES up to this value.
+MAX_MAX_BYTES = 64 * 1024 * 1024
 
 #: The public slug is ``<name>-<hex secret>``. The gateway and the nginx snippet
 #: recognise the same shape, so it is part of the wire contract.
