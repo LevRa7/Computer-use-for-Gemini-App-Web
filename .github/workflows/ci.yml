@@ -37,10 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
         with:
+          # No "cache: pip": this repository has no requirements.txt and no
+          # pyproject.toml (the node's only dependency is websockets, installed
+          # below), and setup-python fails the job outright when it is asked to
+          # cache a file that does not exist.
           python-version: ${{ matrix.python }}
-          cache: pip
 
       - name: Install test dependencies
         run: |
