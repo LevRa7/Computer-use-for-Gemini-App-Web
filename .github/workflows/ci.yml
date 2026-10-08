@@ -49,8 +49,19 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio websockets starlette
+          # What the suite imports directly: pydantic for core/schemas.py and
+          # core/code_cache.py, uvicorn and starlette for the gateway tests and for
+          # agy_mcp_server, websockets for the agent, requests and httpx for the
+          # MCP helper tests, mcp for agy_mcp_server. Every one of these comes from
+          # PyPI, and the first CI run proved that a missing one is not a skip but
+          # a collection error.
+          python -m pip install pytest pytest-asyncio pydantic uvicorn starlette websockets requests httpx mcp
+          # pywin32 is needed by the MCP SDK on Windows only, and Google's SDK is
+          # the "private SDK" the suite treats as optional: the tests that need it
+          # call pytest.importorskip and skip themselves when it is absent, so a
+          # preview package cannot break the whole matrix.
           python -m pip install pywin32 || true
+          python -m pip install google-antigravity || true
         shell: bash
 
       - name: Updater and version gate
@@ -115,9 +126,37 @@ jobs:
         run: |
           $exe = @(Get-ChildItem dist/AntigravityMesh-Setup-*.exe | Select-Object -First 1)
           if ($exe.Count -eq 0) { throw "the build produced no executable" }
-          Write-Host "version: $(& $exe[0].FullName --version)"
-          & $exe[0].FullName --unpack
-          if ($LASTEXITCODE -ne 0) { throw "the payload did not unpack" }
+          $path = $exe[0].FullName
+
+          # The launcher is a *winexe*: PowerShell's call operator does not wait for
+          # one, so $LASTEXITCODE still held the previous command's value and the
+          # first CI run failed with "the payload did not unpack" while the payload
+          # unpacked perfectly well. Start-Process -PassThru reports an empty
+          # ExitCode on Windows PowerShell 5.1 once the process has exited - the
+          # trap install-gui.ps1 documents - so the process is created through
+          # ProcessStartInfo, which is reliable on every PowerShell.
+          function Invoke-Setup {
+              param([string]$Path, [string[]]$Arguments)
+              $info = New-Object System.Diagnostics.ProcessStartInfo
+              $info.FileName = $Path
+              $info.Arguments = ($Arguments -join ' ')
+              $info.UseShellExecute = $false
+              $info.RedirectStandardOutput = $true
+              $info.RedirectStandardError = $true
+              $process = [System.Diagnostics.Process]::Start($info)
+              $out = $process.StandardOutput.ReadToEnd()
+              $err = $process.StandardError.ReadToEnd()
+              $process.WaitForExit()
+              return @{ ExitCode = $process.ExitCode; Output = (($out + $err).Trim()) }
+          }
+
+          $version = Invoke-Setup $path @('--version')
+          if ($version.ExitCode -ne 0) { throw "--version exited $($version.ExitCode): $($version.Output)" }
+          Write-Host "version: $($version.Output)"
+
+          $unpack = Invoke-Setup $path @('--unpack')
+          if ($unpack.ExitCode -ne 0) { throw "--unpack exited $($unpack.ExitCode): $($unpack.Output)" }
+          Write-Host "unpack: $($unpack.Output)"
 
       - uses: actions/upload-artifact@v4
         with:

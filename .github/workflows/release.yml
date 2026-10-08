@@ -117,9 +117,33 @@ jobs:
         run: |
           $exe = @(Get-ChildItem dist/AntigravityMesh-Setup-*.exe | Select-Object -First 1)
           if ($exe.Count -eq 0) { throw "the build produced no executable" }
-          Write-Host "version: $(& $exe[0].FullName --version)"
-          & $exe[0].FullName --unpack
-          if ($LASTEXITCODE -ne 0) { throw "the payload did not unpack" }
+          $path = $exe[0].FullName
+
+          # A *winexe* is not waited for by PowerShell's call operator, and
+          # Start-Process -PassThru can report an empty ExitCode on Windows
+          # PowerShell 5.1; ProcessStartInfo is reliable on both.
+          function Invoke-Setup {
+              param([string]$Path, [string[]]$Arguments)
+              $info = New-Object System.Diagnostics.ProcessStartInfo
+              $info.FileName = $Path
+              $info.Arguments = ($Arguments -join ' ')
+              $info.UseShellExecute = $false
+              $info.RedirectStandardOutput = $true
+              $info.RedirectStandardError = $true
+              $process = [System.Diagnostics.Process]::Start($info)
+              $out = $process.StandardOutput.ReadToEnd()
+              $err = $process.StandardError.ReadToEnd()
+              $process.WaitForExit()
+              return @{ ExitCode = $process.ExitCode; Output = (($out + $err).Trim()) }
+          }
+
+          $version = Invoke-Setup $path @('--version')
+          if ($version.ExitCode -ne 0) { throw "--version exited $($version.ExitCode): $($version.Output)" }
+          Write-Host "version: $($version.Output)"
+
+          $unpack = Invoke-Setup $path @('--unpack')
+          if ($unpack.ExitCode -ne 0) { throw "--unpack exited $($unpack.ExitCode): $($unpack.Output)" }
+          Write-Host "unpack: $($unpack.Output)"
 
       - uses: actions/upload-artifact@v4
         with:
