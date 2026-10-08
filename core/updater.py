@@ -734,12 +734,25 @@ def _strip_single_root(directory: str) -> str:
     return directory
 
 
+def _no_window_flags() -> int:
+    """CREATE_NO_WINDOW for a console child on Windows, 0 elsewhere.
+
+    The agent itself runs in a hidden console (the Windows launcher starts it with
+    ``WshShell.Run ..., 0``), but a child that does not inherit that console gets a
+    NEW one - and a new console is a window on the user's desktop. The updater
+    starts powershell.exe, taskkill.exe and schtasks.exe, so without this flag an
+    update paints windows nobody asked for.
+    """
+    return 0x08000000 if os.name == "nt" else 0
+
+
 def _run_capture(argv: Sequence[str], *, cwd: Optional[str] = None,
                  timeout: float = 180.0,
                  env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
     try:
         completed = subprocess.run(list(argv), cwd=cwd, capture_output=True,
-                                   timeout=timeout, check=False, env=env)
+                                   timeout=timeout, check=False, env=env,
+                                   creationflags=_no_window_flags())
     except FileNotFoundError as exc:
         return (127, str(exc))
     except subprocess.TimeoutExpired:

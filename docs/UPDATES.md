@@ -21,6 +21,7 @@ match a published checksum.
 | `ops/update.ps1` | The Windows wrapper: finds the interpreter the node is pinned to and the payload directory from the Startup launcher, then runs the updater. Refuses the Microsoft Store alias. |
 | `bin/cli.js update` | `gemini-computer-use update [-Check] [-Force] [-Json] …` — the same thing from the CLI. |
 | `AntigravityMeshUpdater` (Scheduled Task) | Runs `ops/update.ps1 -Quiet` once a day at 03:30, so a machine nobody logs into still moves forward. Registered by `install.ps1`. |
+| `ops/windows/run-hidden.vbs` | Starts a node script with no console window at all; both scheduled tasks go through it. A task has no console of its own, so `powershell.exe` would be given a new one and Windows draws it before honouring `-WindowStyle Hidden` — a black window every five minutes. `wscript.exe` is a GUI host, and `WshShell.Run …, 0` hands the child `SW_HIDE`, so nothing is ever drawn. |
 | `.github/workflows/release.yml` | Turns a pushed tag into a release with the assets a node needs. |
 
 On Linux and macOS the agent runs continuously under systemd/launchd, so its own

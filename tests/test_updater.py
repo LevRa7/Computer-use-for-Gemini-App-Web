@@ -1045,3 +1045,47 @@ def test_the_ci_workflow_publishes_what_the_updater_reads():
     assert "AntigravityMesh-Setup-" in workflow
     assert "core/version.py" in workflow, "the tag must be checked against the module version"
     assert "gh release upload" in workflow
+
+
+def test_the_windows_tasks_start_windowless():
+    """A task has no console of its own, so powershell.exe is given a NEW one - and
+    a new console is a black window that the desktop draws before "-WindowStyle
+    Hidden" takes effect. The watchdog fires every five minutes, so that flash is
+    the most visible thing this project does on a Windows desktop.
+    """
+    launcher = REPO / "ops" / "windows" / "run-hidden.vbs"
+    assert launcher.is_file(), "ops/windows/run-hidden.vbs is what makes a task windowless"
+    raw = launcher.read_bytes()
+    assert raw, "run-hidden.vbs is empty"
+    offenders = sorted({byte for byte in raw if byte > 0x7F})
+    assert offenders == [], "run-hidden.vbs must stay ASCII: wscript reads it as ANSI"
+    text = raw.decode("ascii")
+    assert "shell.Run command, 0, False" in text, (
+        "window style 0 is the whole point: it passes SW_HIDE to the child")
+    assert "cmd.exe /c" in text and "powershell.exe" in text
+    assert "Chr(34)" in text, "the launcher builds a quoted command line"
+    # It is generic - the target is the task's own first argument, resolved against
+    # the launcher's location - so one file serves both tasks and a payload that
+    # moves. The usage examples in the header comment are not code, so this checks
+    # the assignment itself.
+    assert 'scriptPath = payload & "\\" & WScript.Arguments(0)' in text
+    assert "GetParentFolderName" in text
+
+    installer = (REPO / "install.ps1").read_text(encoding="utf-8-sig")
+    assert installer.count("run-hidden.vbs") >= 4, "bootstrap list plus both tasks"
+    assert "wscript.exe" in installer
+    for task in ("AntigravityMeshWatchdog", "AntigravityMeshUpdater"):
+        assert task in installer, "%s must still be registered" % task
+    assert "New-ScheduledTaskAction -Execute $watchdogHost" in installer
+    assert "New-ScheduledTaskAction -Execute $updaterHost" in installer
+    assert "New-ScheduledTaskAction -Execute 'powershell.exe'" not in installer, (
+        "a task registered with a bare powershell.exe action flashes a console window")
+
+
+def test_the_updater_itself_does_not_paint_windows():
+    """Its children are powershell.exe, taskkill.exe and schtasks.exe: each would
+    allocate a console of its own and draw it."""
+    flags = updater._no_window_flags()
+    assert flags == (0x08000000 if os.name == "nt" else 0)
+    source = (REPO / "core" / "updater.py").read_text(encoding="utf-8")
+    assert "creationflags=_no_window_flags()" in source

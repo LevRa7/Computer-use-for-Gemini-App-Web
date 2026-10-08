@@ -482,6 +482,7 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
         "core/__init__.py",
         "skills/orchestrator.md",
         "ops/windows/agent-watchdog.ps1",
+        "ops/windows/run-hidden.vbs",
         "ops/update.ps1",
         "ops/doctor.ps1"
     )
@@ -721,15 +722,40 @@ $env:MESH_TOKEN = $AssignedToken
 # A Startup entry runs once per logon: it cannot recover a node whose agent died
 # (crash, Windows Update reboot, broken dependency). A Scheduled Task repeats the
 # watchdog every five minutes, so a dead agent comes back on its own.
+#
+# Both tasks are started through ops\windows\run-hidden.vbs rather than
+# powershell.exe directly. A task has no console of its own, so Windows allocates
+# one for powershell.exe and only then honours "-WindowStyle Hidden": the window is
+# created, drawn and hidden again, and the user sees a black window flash every
+# five minutes. wscript.exe is a GUI host - it never allocates a console - and
+# WshShell.Run with window style 0 passes SW_HIDE to the child, so nothing is ever
+# drawn. The task argument names the node script relative to the payload, which
+# run-hidden.vbs resolves from its own location, so the action keeps working if the
+# payload moves.
 $watchdog = Join-Path $ScriptDir 'ops\windows\agent-watchdog.ps1'
+$runHidden = Join-Path $ScriptDir 'ops\windows\run-hidden.vbs'
 if (Test-Path -LiteralPath $watchdog) {
     # Two spellings of the same action, because the two registration paths parse
     # quotes differently: schtasks.exe needs the quotes around the script path
     # backslash-escaped (otherwise a profile path with a space is split into two
     # arguments and the task is rejected outright), while the ScheduledTasks
     # cmdlets take the argument literally.
-    $watchdogActionCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $watchdog + '" -Quiet'
-    $watchdogTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $watchdog + '\" -Quiet'
+    if (Test-Path -LiteralPath $runHidden) {
+        $watchdogHost = 'wscript.exe'
+        $watchdogArguments = '"' + $runHidden + '" "ops\windows\agent-watchdog.ps1" -Quiet'
+        $watchdogTaskCommand = 'wscript.exe \"' + $runHidden + '\" \"ops\windows\agent-watchdog.ps1\" -Quiet'
+    } else {
+        # A payload without the launcher still self-heals; it just flashes. Saying
+        # so is better than leaving the operator with a window they cannot explain.
+        if ($Lang -eq "ru") {
+            Write-Host "[!] $runHidden не найден: задача-сторож будет запускаться напрямую и мелькать окном." -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] $runHidden is missing: the watchdog task will run PowerShell directly and flash a window." -ForegroundColor Yellow
+        }
+        $watchdogHost = 'powershell.exe'
+        $watchdogArguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $watchdog + '" -Quiet'
+        $watchdogTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $watchdog + '\" -Quiet'
+    }
     $watchdogRegistered = $false
     $watchdogError = ''
     # schtasks.exe is tried first because it registers a task for the CURRENT user
@@ -743,7 +769,7 @@ if (Test-Path -LiteralPath $watchdog) {
     if ($LASTEXITCODE -eq 0) { $watchdogRegistered = $true }
     if (-not $watchdogRegistered) {
         try {
-            $watchdogAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $watchdogActionCommand -WorkingDirectory $ScriptDir
+            $watchdogAction = New-ScheduledTaskAction -Execute $watchdogHost -Argument $watchdogArguments -WorkingDirectory $ScriptDir
             # No -RepetitionDuration on purpose: PowerShell serialises
             # [TimeSpan]::MaxValue as P99999999DT23H59M59S, which the Task Scheduler
             # schema rejects outright; an omitted duration means "repeat
@@ -795,8 +821,16 @@ if (Test-Path -LiteralPath $watchdog) {
 # is not running at 03:30.
 $updaterScript = Join-Path $ScriptDir 'ops\update.ps1'
 if (Test-Path -LiteralPath $updaterScript) {
-    $updaterActionCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $updaterScript + '" -Quiet'
-    $updaterTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $updaterScript + '\" -Quiet'
+    # Same windowless host as the watchdog: a daily flash is still a flash.
+    if (Test-Path -LiteralPath $runHidden) {
+        $updaterHost = 'wscript.exe'
+        $updaterArguments = '"' + $runHidden + '" "ops\update.ps1" -Quiet'
+        $updaterTaskCommand = 'wscript.exe \"' + $runHidden + '\" \"ops\update.ps1\" -Quiet'
+    } else {
+        $updaterHost = 'powershell.exe'
+        $updaterArguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $updaterScript + '" -Quiet'
+        $updaterTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $updaterScript + '\" -Quiet'
+    }
     $updaterRegistered = $false
     $updaterError = ''
     # schtasks.exe first, for the same reason as the watchdog: it needs no write
@@ -807,7 +841,7 @@ if (Test-Path -LiteralPath $updaterScript) {
     if ($LASTEXITCODE -eq 0) { $updaterRegistered = $true }
     if (-not $updaterRegistered) {
         try {
-            $updaterAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $updaterActionCommand -WorkingDirectory $ScriptDir
+            $updaterAction = New-ScheduledTaskAction -Execute $updaterHost -Argument $updaterArguments -WorkingDirectory $ScriptDir
             $updaterTriggers = @((New-ScheduledTaskTrigger -Daily -At '03:30'))
             $updaterSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                 -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)

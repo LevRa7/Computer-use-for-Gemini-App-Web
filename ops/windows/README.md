@@ -5,9 +5,33 @@
 | `agent-watchdog.ps1` | single-shot supervisor: check the node, restart the agent if it is dead |
 | `../doctor.ps1` | read-only diagnostic: report every fact that explains an offline node |
 | `../update.ps1` | single-shot updater: install a newer release and let the node restart onto it |
+| `run-hidden.vbs` | the windowless launcher both scheduled tasks go through: no console is ever drawn |
 
-All three are ASCII-only Windows PowerShell 5.1 scripts and use nothing but in-box
-cmdlets. None of them needs the task scheduler to be running in order to work.
+All three PowerShell scripts are ASCII-only, target Windows PowerShell 5.1 and use
+nothing but in-box cmdlets; `run-hidden.vbs` is ASCII-only too and needs only
+`wscript.exe`. None of them needs the task scheduler to be running in order to work.
+
+## Why `run-hidden.vbs` exists
+
+A scheduled task has no console of its own. When the action is `powershell.exe`,
+Windows therefore allocates a **new** console for it and only then applies
+`-WindowStyle Hidden`: the window is created, drawn and hidden again, and the user
+sees a black window appear and disappear. The watchdog fires every five minutes, so
+that flash is the most noticeable thing this project does on a desktop.
+
+`wscript.exe` is a GUI host and never allocates a console, and
+`WshShell.Run command, 0, False` hands the child `SW_HIDE` in its `STARTUPINFO` —
+the window is hidden from the first moment, so nothing is ever painted. That is the
+same mechanism as the logon launcher (`antigravity-agent.vbs`), which is why a node
+starts without a window either. Output goes to
+`<ConfigDir>\<script name>.out.log`, because a window that never appears also never
+shows an error.
+
+```powershell
+# exactly how the two tasks call it; the script path is relative to the payload
+wscript.exe "$Payload\ops\windows\run-hidden.vbs" "ops\windows\agent-watchdog.ps1" -Quiet
+wscript.exe "$Payload\ops\windows\run-hidden.vbs" "ops\update.ps1" -Quiet
+```
 
 ## Why they exist
 
@@ -106,10 +130,11 @@ Start-ScheduledTask -TaskName AntigravityMeshWatchdog
 
 Task name: **`AntigravityMeshWatchdog`**.
 
-* **Action**: `powershell.exe`
-* **Arguments**: `-NoProfile -ExecutionPolicy Bypass -File "<payload>\ops\windows\agent-watchdog.ps1" -Quiet`
+* **Action**: `wscript.exe`
+* **Arguments**: `"<payload>\ops\windows\run-hidden.vbs" "ops\windows\agent-watchdog.ps1" -Quiet`
 * **Working directory**: the payload directory (the directory that contains
-  `core\`, next to `install.ps1`)
+  `core\`, next to `install.ps1`). The launcher resolves the script against its own
+  location, so the registered path survives a payload that moves.
 * **Triggers**: once at logon of the installing user, plus a repeating trigger
   (`-Once -RepetitionInterval 5 minutes`, indefinite duration). The logon trigger
   mirrors the `.vbs`; the repeating trigger is what actually recovers the node, and
@@ -119,9 +144,9 @@ Task name: **`AntigravityMeshWatchdog`**.
 
 ```powershell
 $PayloadDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Watchdog   = Join-Path $PayloadDir 'ops\windows\agent-watchdog.ps1'
-$action     = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $Watchdog + '" -Quiet') `
+$Launcher   = Join-Path $PayloadDir 'ops\windows\run-hidden.vbs'
+$action     = New-ScheduledTaskAction -Execute 'wscript.exe' `
+                -Argument ('"' + $Launcher + '" "ops\windows\agent-watchdog.ps1" -Quiet') `
                 -WorkingDirectory $PayloadDir
 $atLogon    = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $repeat     = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
@@ -173,11 +198,12 @@ and starts a helper that brings the agent back. See
 | `3` | the update failed: network, checksum mismatch, unusable payload |
 | `4` | the update was installed and the node is restarting |
 
-Register it as **`AntigravityMeshUpdater`**: action `powershell.exe`, arguments
-`-NoProfile -ExecutionPolicy Bypass -File "<payload>\ops\update.ps1" -Quiet`,
-working directory the payload directory, trigger daily (the installer uses 03:30),
-settings `-MultipleInstances IgnoreNew` and `-StartWhenAvailable` (so a machine that
-was off at 03:30 updates at the next opportunity).
+Register it as **`AntigravityMeshUpdater`**: action `wscript.exe` (through
+`run-hidden.vbs`, so the daily run never shows a window), arguments
+`"<payload>\ops\windows\run-hidden.vbs" "ops\update.ps1" -Quiet`, working directory
+the payload directory, trigger daily (the installer uses 03:30), settings
+`-MultipleInstances IgnoreNew` and `-StartWhenAvailable` (so a machine that was off
+at 03:30 updates at the next opportunity).
 
 ---
 
