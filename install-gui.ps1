@@ -576,12 +576,12 @@ function Stop-Pipeline {
 #  Reading install.ps1's output back
 # ------------------------------------------------------------------------------
 
-# install.ps1 -DryRun prints five "[DRY-RUN] <label> : <value>" lines in a fixed
-# order (Python, websockets, domain, config, autostart). The labels are
+# install.ps1 -DryRun prints six "[DRY-RUN] <label> : <value>" lines in a fixed
+# order (Python, websockets, domain, config, autostart, node). The labels are
 # localised, so this reads them positionally instead of matching on the label.
 function Get-PreflightFacts {
     param([string]$Text)
-    $facts = @{ Python = ''; Websockets = ''; Domain = ''; Config = ''; Autostart = '' }
+    $facts = @{ Python = ''; Websockets = ''; Domain = ''; Config = ''; Autostart = ''; Node = '' }
     $values = New-Object System.Collections.ArrayList
     foreach ($line in ($Text -split "`n")) {
         $trimmed = $line.Trim()
@@ -594,6 +594,9 @@ function Get-PreflightFacts {
     if ($values.Count -ge 3) { $facts.Domain = $values[2] }
     if ($values.Count -ge 4) { $facts.Config = $values[3] }
     if ($values.Count -ge 5) { $facts.Autostart = $values[4] }
+    # An older install.ps1 copy prints five lines: Node stays empty and the report
+    # simply omits that row.
+    if ($values.Count -ge 6) { $facts.Node = $values[5] }
     return $facts
 }
 
@@ -1304,6 +1307,9 @@ function Start-Preflight {
             [void]$lines.Add(((Get-UiText -Key 'preflight_domain') + ' : ' + $facts.Domain))
             [void]$lines.Add(((Get-UiText -Key 'preflight_config') + ' : ' + $facts.Config))
             [void]$lines.Add(((Get-UiText -Key 'preflight_autostart') + ' : ' + $facts.Autostart))
+            if ($facts.Node) {
+                [void]$lines.Add(((Get-UiText -Key 'preflight_node') + ' : ' + $facts.Node))
+            }
             if ($script:Preflight.Problems) {
                 [void]$lines.Add('')
                 [void]$lines.Add((Get-UiText -Key 'preflight_problems'))
@@ -1636,20 +1642,25 @@ function Invoke-SelfTest {
     Add-SelfTestResult 'console_installer_present' (Test-Path -LiteralPath $ConsoleInstaller) $ConsoleInstaller
     Add-SelfTestResult 'shell_installer_present' (Test-Path -LiteralPath $ShellInstaller) $ShellInstaller
 
-    # 12. the dry-run parser reads install.ps1's five lines positionally
+    # 12. the dry-run parser reads install.ps1's six lines positionally, and an
+    #     older five-line copy still parses (the node row is simply empty)
     $dryRunText = @(
         '[DRY-RUN] Python      : C:\Python312\python.exe',
         '[DRY-RUN] websockets  : installed',
         '[DRY-RUN] Domain      : mesh.example.test',
         '[DRY-RUN] Config      : C:\Users\probe\.config\antigravity-mesh',
-        '[DRY-RUN] Autostart   : C:\Users\probe\Startup\antigravity-agent.vbs'
+        '[DRY-RUN] Autostart   : C:\Users\probe\Startup\antigravity-agent.vbs',
+        '[DRY-RUN] Node        : offline (probe)'
     ) -join "`n"
     $facts = Get-PreflightFacts -Text $dryRunText
     $factsOk = ($facts.Python -eq 'C:\Python312\python.exe') -and
         ($facts.Websockets -eq 'installed') -and
         ($facts.Domain -eq 'mesh.example.test') -and
         ($facts.Config -eq 'C:\Users\probe\.config\antigravity-mesh') -and
-        ($facts.Autostart -eq 'C:\Users\probe\Startup\antigravity-agent.vbs')
+        ($facts.Autostart -eq 'C:\Users\probe\Startup\antigravity-agent.vbs') -and
+        ($facts.Node -eq 'offline (probe)')
+    $legacyText = (($dryRunText -split "`n")[0..4] -join "`n")
+    $factsOk = $factsOk -and ((Get-PreflightFacts -Text $legacyText).Node -eq '')
     Add-SelfTestResult 'preflight_parser' $factsOk ("domain='" + $facts.Domain + "' python='" + $facts.Python + "'")
 
     # 13. "not configured" is detected without depending on the language

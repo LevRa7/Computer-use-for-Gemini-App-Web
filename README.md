@@ -254,8 +254,8 @@ The visual installer starts in the language of your Windows language settings �
 
 - **"No gateway domain configured"** — this copy was not published with a domain. Pass one: use *Custom setup* in the wizard, or `.\install.ps1 -Gateway <shared-domain>`, or set `MESH_PUBLIC_URL`.
 - **Registration fails** — the installer stops *before* writing anything when the gateway cannot be reached. Check that the domain resolves, then retry with an explicit `-Gateway`.
-- **`python` opens the Microsoft Store** — that is the App Execution Alias, not an interpreter. Both installers resolve a real `python.exe` by full path and ignore the alias; if none is found they install Python 3.12 via `winget`.
-- **The node does not come back after a reboot** — read `%USERPROFILE%\.config\antigravity-mesh\agent.log`.
+- **`python` opens the Microsoft Store** — that is the App Execution Alias, not an interpreter. Both installers resolve a real `python.exe` by full path and ignore the alias; the wizard never pins an alias into the autostart entry.
+- **The node does not come back after a reboot** — run `.\ops\doctor.ps1`: it prints the autostart interpreter, the heartbeat age, the last `agent.log` lines (including a torn final line) and the gateway's own view of this node. `.\ops\windows\agent-watchdog.ps1` performs that check once and restarts the agent; the scheduled task `AntigravityMeshWatchdog` runs it every five minutes, so a dead agent comes back on its own.
 
 ### Standalone on Windows
 
@@ -594,8 +594,8 @@ PowerShell, которые в Windows уже есть, а собирается �
 
 - **«Домен шлюза не задан»** — эта копия не была опубликована с доменом. Укажите его: режим *«Кастомная настройка»* в мастере, либо `.\install.ps1 -Gateway <общий-домен>`, либо переменная `MESH_PUBLIC_URL`.
 - **Регистрация не проходит** — установщик останавливается **до** записи файлов, если шлюз недоступен. Проверьте, что домен разрешается, и повторите с явным `-Gateway`.
-- **`python` открывает Microsoft Store** — это заглушка App Execution Alias, а не интерпретатор. Оба установщика находят настоящий `python.exe` по полному пути и заглушку игнорируют; если интерпретатора нет, ставят Python 3.12 через `winget`.
-- **Узел не поднимается после перезагрузки** — смотрите `%USERPROFILE%\.config\antigravity-mesh\agent.log`.
+- **`python` открывает Microsoft Store** — это заглушка App Execution Alias, а не интерпретатор. Оба установщика находят настоящий `python.exe` по полному пути; в автозапуск заглушка не попадает никогда.
+- **Узел не поднимается после перезагрузки** — запустите `.\ops\doctor.ps1`: он покажет интерпретатор из автозапуска, свежесть heartbeat, последние строки `agent.log` (включая оборванную) и то, что о узле думает шлюз. `.\ops\windows\agent-watchdog.ps1` выполняет ту же проверку один раз и поднимает агент; задача `AntigravityMeshWatchdog` повторяет её каждые пять минут, поэтому умерший агент поднимается сам.
 
 ### Автономный режим на Windows
 

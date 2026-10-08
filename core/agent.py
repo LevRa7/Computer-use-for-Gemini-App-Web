@@ -34,16 +34,26 @@ Resilience contract:
 """
 
 import asyncio
+import atexit
+import faulthandler
 import json
 import logging
 import os
 import random
+import signal
 import socket
 import sys
+import threading
 import time
 from typing import Optional
 
-import websockets
+try:
+    import websockets
+except ImportError as _websockets_error:      # a launcher pinned a Python without the dep
+    websockets = None                         # type: ignore[assignment]
+    _WEBSOCKETS_IMPORT_ERROR = _websockets_error
+else:
+    _WEBSOCKETS_IMPORT_ERROR = None
 
 from core import domain, mcp_tools
 
@@ -52,6 +62,16 @@ logger = logging.getLogger("agy-agent")
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "antigravity-mesh")
 DEFAULT_CONFIG_FILE = os.path.join(CONFIG_DIR, "agent.env")
+
+#: Diagnostics that answer "why is this node offline?" without the tunnel. The
+#: watchdog (ops/windows/agent-watchdog.ps1) and ops/doctor.ps1 read these files,
+#: and the incident that motivated them - a launcher pinned to the Microsoft
+#: Store Python alias that left a single torn line in agent.log and kept the node
+#: offline for a day - is exactly what they prevent.
+HEARTBEAT_FILE = os.path.join(CONFIG_DIR, "agent.heartbeat")
+FAULT_FILE = os.path.join(CONFIG_DIR, "agent.fault.log")
+STOP_MARKER_FILE = os.path.join(CONFIG_DIR, "agent.stopped")
+HEARTBEAT_INTERVAL = 15.0
 
 #: Backoff cap for ordinary link failures.
 MAX_BACKOFF = 15.0
@@ -171,6 +191,187 @@ configure_from_env()
 
 
 # ---------------------------------------------------------------------------
+# Runtime diagnostics: banner, fault log, heartbeat, clean-stop marker
+#
+# A node that never connects leaves the client with an opaque frontend error, so
+# every start records what it is: which interpreter, which websockets, from which
+# directory. The heartbeat makes "the agent runs but is not connected" visible to
+# the watchdog, and the absence of a clean-stop marker tells it that the process
+# was killed instead of shutting down.
+# ---------------------------------------------------------------------------
+
+_RUNTIME_FACTS = None
+_FAULT_HANDLE = None
+
+#: Live state reported through the heartbeat. Written by the event loop and read
+#: by the heartbeat thread; plain dict operations are atomic enough under the GIL
+#: and a lost update only costs one cycle of freshness.
+_HEARTBEAT_STATE = {
+    "connected": False,
+    "connects": 0,
+    "last_tool": "",
+    "last_tool_at": 0.0,
+    "last_error": "",
+    "started_at": 0.0,
+}
+
+
+def runtime_facts() -> dict:
+    """Interpreter, dependency and location facts of this agent process."""
+    global _RUNTIME_FACTS
+    if _RUNTIME_FACTS is None:
+        version = getattr(websockets, "__version__", "MISSING") if websockets else "MISSING"
+        _RUNTIME_FACTS = {
+            "python": "%d.%d.%d" % sys.version_info[:3],
+            "interpreter": sys.executable or "",
+            "websockets": version,
+        }
+    facts = dict(_RUNTIME_FACTS)
+    # Read fresh: tests (and a re-configured process) may change these.
+    facts["gateway"] = GATEWAY_HOST
+    facts["user"] = USER
+    return facts
+
+
+def log_runtime_banner() -> dict:
+    """Log one line naming the interpreter a launcher actually started.
+
+    The Windows incident produced no such line: the launcher ran the Microsoft
+    Store alias, which printed ``Python `` and exited, so nothing in the log said
+    which interpreter was expected.
+    """
+    facts = runtime_facts()
+    logger.info("Runtime: interpreter=%s python=%s websockets=%s cwd=%s pid=%s",
+                facts["interpreter"] or "<unknown>", facts["python"], facts["websockets"],
+                os.getcwd(), os.getpid())
+    if _WEBSOCKETS_IMPORT_ERROR is not None:
+        logger.error("The 'websockets' package is not importable by this interpreter (%s): %s. "
+                     "The tunnel cannot start; run: %s -m pip install websockets",
+                     facts["interpreter"] or "<unknown>", _WEBSOCKETS_IMPORT_ERROR,
+                     facts["interpreter"] or "python")
+    if "\\WindowsApps\\" in facts["interpreter"] or "/WindowsApps/" in facts["interpreter"]:
+        logger.error("This agent runs through the Microsoft Store 'python.exe' alias (%s). That alias "
+                     "stops working after a Store repair or an update; the installer must pin a real "
+                     "interpreter instead.", facts["interpreter"])
+    return facts
+
+
+def write_heartbeat(path: Optional[str] = None, **extra) -> dict:
+    """Atomically refresh the heartbeat file read by the watchdog and the doctor."""
+    target = path or HEARTBEAT_FILE
+    payload = {"ts": time.time(), "pid": os.getpid()}
+    payload.update(runtime_facts())
+    payload.update(_HEARTBEAT_STATE)
+    payload.update(extra)
+    try:
+        directory = os.path.dirname(target)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temporary = target + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, target)
+    except Exception as exc:                   # diagnostics never break the tunnel
+        logger.debug("Could not write the heartbeat %s: %s", target, exc)
+    return payload
+
+
+def read_heartbeat(path: Optional[str] = None) -> dict:
+    """The last heartbeat, or an empty dict when there is none or it is unreadable."""
+    target = path or HEARTBEAT_FILE
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def heartbeat_age(path: Optional[str] = None) -> float:
+    """Seconds since the last heartbeat; ``inf`` when there is none."""
+    try:
+        return max(0.0, time.time() - float(read_heartbeat(path).get("ts")))
+    except Exception:
+        return float("inf")
+
+
+def mark_connected(connected: bool, reason: str = "") -> None:
+    """Record the tunnel state for the heartbeat."""
+    _HEARTBEAT_STATE["connected"] = bool(connected)
+    if connected:
+        _HEARTBEAT_STATE["connects"] = int(_HEARTBEAT_STATE.get("connects", 0)) + 1
+        _HEARTBEAT_STATE["last_error"] = ""
+    elif reason:
+        _HEARTBEAT_STATE["last_error"] = str(reason)[:300]
+
+
+def start_heartbeat(path: Optional[str] = None, interval: float = HEARTBEAT_INTERVAL):
+    """Start the daemon heartbeat thread (it must never keep the process alive)."""
+    _HEARTBEAT_STATE["started_at"] = time.time()
+    write_heartbeat(path)
+
+    def _beat():
+        while True:
+            time.sleep(interval)
+            write_heartbeat(path)
+
+    thread = threading.Thread(target=_beat, name="mesh-heartbeat", daemon=True)
+    thread.start()
+    return thread
+
+
+def enable_fault_log(path: Optional[str] = None) -> Optional[str]:
+    """Send fatal-error tracebacks (native crash, deadlock) to their own file.
+
+    Without this the only trace of an abnormal end is a torn line in agent.log.
+    """
+    global _FAULT_HANDLE
+    target = path or FAULT_FILE
+    try:
+        directory = os.path.dirname(target)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        _FAULT_HANDLE = open(target, "a", encoding="utf-8")
+        faulthandler.enable(file=_FAULT_HANDLE, all_threads=True)
+    except Exception as exc:
+        logger.debug("Could not enable the fault log %s: %s", target, exc)
+        return None
+    return target
+
+
+def write_stop_marker(reason: str = "stop") -> None:
+    """Record a clean stop: a missing marker means the process was killed."""
+    try:
+        directory = os.path.dirname(STOP_MARKER_FILE)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(STOP_MARKER_FILE, "w", encoding="utf-8") as handle:
+            handle.write("%s pid=%s reason=%s\n"
+                         % (time.strftime("%Y-%m-%dT%H:%M:%S"), os.getpid(), reason))
+    except Exception:
+        pass
+
+
+def install_exit_markers() -> None:
+    """Write the clean-stop marker on a normal exit or on a received signal."""
+    atexit.register(write_stop_marker, "atexit")
+
+    def _on_signal(signum, _frame):
+        write_stop_marker("signal=%s" % signum)
+        raise SystemExit(0)
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            signal.signal(number, _on_signal)
+        except Exception:
+            continue
+
+
+# ---------------------------------------------------------------------------
 # Single instance per node name
 # ---------------------------------------------------------------------------
 
@@ -228,7 +429,14 @@ def wait_for_instance_lock(user: str) -> InstanceLock:
 async def handle_tool_call(name: str, args: dict) -> dict:
     """Forward one tool call to the shared implementation in a worker thread."""
     logger.info("Executing %s", name)
-    return await asyncio.to_thread(mcp_tools.call_tool, name, args or {})
+    _HEARTBEAT_STATE["last_tool"] = name or ""
+    _HEARTBEAT_STATE["last_tool_at"] = time.time()
+    try:
+        return await asyncio.to_thread(mcp_tools.call_tool, name, args or {})
+    finally:
+        # A heartbeat right after every call makes "the agent is alive and served
+        # this tool" visible to the watchdog without reading the tunnel state.
+        write_heartbeat()
 
 
 async def _serve_call(ws, req_id, params: dict) -> None:
@@ -239,6 +447,7 @@ async def _serve_call(ws, req_id, params: dict) -> None:
     except Exception as tool_exc:
         # A tool must never take the tunnel down with it.
         logger.warning(f"Tool {tool_name} failed: {tool_exc}")
+        _HEARTBEAT_STATE["last_error"] = "%s: %s" % (type(tool_exc).__name__, tool_exc)
         res = {"error": f"{type(tool_exc).__name__}: {tool_exc}"}
     try:
         await ws.send(json.dumps({"id": req_id, "result": res}, ensure_ascii=False))
@@ -246,6 +455,8 @@ async def _serve_call(ws, req_id, params: dict) -> None:
         # The link dropped while the tool ran; the gateway already failed the
         # call, and the reconnect loop restores the tunnel.
         logger.warning(f"Could not deliver result of {tool_name}: {send_exc}")
+        _HEARTBEAT_STATE["last_error"] = "send failed: %s" % send_exc
+        write_heartbeat()
 
 
 def _is_unauthorized(exc: BaseException) -> bool:
@@ -318,6 +529,8 @@ async def run_agent():
                                             max_size=None) as ws:
                 logger.info(f"Connected to Mesh Gateway as '{USER}'!")
                 backoff = 1.0                      # healthy again
+                mark_connected(True)
+                write_heartbeat()
                 async for raw_msg in ws:
                     try:
                         data = json.loads(raw_msg)
@@ -335,6 +548,10 @@ async def run_agent():
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            # The heartbeat is how a watchdog - and an operator reading the files
+            # later - can tell "running but disconnected" from "not running".
+            mark_connected(False, "%s: %s" % (type(e).__name__, e))
+            write_heartbeat()
             if _is_unauthorized(e):
                 delay = UNAUTHORIZED_BACKOFF
                 logger.error("Gateway rejected node '%s' (4001 Unauthorized): the token is wrong or the "
@@ -358,11 +575,23 @@ def main() -> None:
     if problem:
         logger.error("%s Refusing to start.", problem)
         sys.exit(2)
+    install_exit_markers()
+    enable_fault_log()
+    log_runtime_banner()
+    start_heartbeat()
+    if _WEBSOCKETS_IMPORT_ERROR is not None:
+        # The banner above already named the interpreter and the missing module.
+        logger.error("Refusing to start: this interpreter cannot import 'websockets'.")
+        sys.exit(3)
     _lock = wait_for_instance_lock(USER)  # held for the life of the process
+    write_heartbeat()
+    logger.info("Instance lock acquired: this is the only agent for node '%s'.", USER)
     try:
         asyncio.run(run_agent())
     except KeyboardInterrupt:
         sys.exit(0)
+    finally:
+        write_heartbeat(stopping=True)
 
 
 if __name__ == "__main__":

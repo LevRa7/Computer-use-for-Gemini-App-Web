@@ -50,17 +50,21 @@ def test_query_param_on_shared_domain_is_canonical():
 
 def test_query_param_wins_over_a_legacy_subdomain():
     """The shared domain is the contract; a stale subdomain must not override it."""
-    req = _request("?user=node-one", host="legacy-node.smart-server.online")
+    req = _request("?user=node-one", host="legacy-node." + gateway.PUBLIC_HOST)
     assert gateway.get_target_user(req) == "node-one"
 
 
 def test_legacy_subdomain_still_resolves_when_no_user_param():
-    req = _request("", host="legacy-node.smart-server.online")
+    # The host is built from THIS process's resolved domain, not from the
+    # repository default: a node machine with its own domain.env (the normal
+    # case) resolves a different public host, and a hardcoded one made this test
+    # depend on the machine it ran on.
+    req = _request("", host="legacy-node." + gateway.PUBLIC_HOST)
     assert gateway.get_target_user(req) == "legacy-node"
 
 
 def test_shared_domain_without_user_is_anonymous():
-    assert gateway.get_target_user(_request("", host="smart-server.online")) == "anonymous"
+    assert gateway.get_target_user(_request("", host=gateway.PUBLIC_HOST)) == "anonymous"
 
 
 # ---------------------------------------------------------------------------

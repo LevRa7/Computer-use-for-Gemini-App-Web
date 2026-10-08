@@ -51,67 +51,126 @@ if ($Lang -eq "ru") {
 # dependencies were verified.
 
 # Python check & auto-install.
-# Windows ships a "python.exe" App Execution Alias that opens the Microsoft Store
-# instead of running Python, so "python --version" can look successful while doing
-# nothing. Resolve a real interpreter once and pin its full path in $PyExe.
+# Windows ships a "python.exe" App Execution Alias under
+# %LOCALAPPDATA%\Microsoft\WindowsApps that runs Python only while the Microsoft
+# Store package stays healthy: it can be on PATH, print nothing usable and exit
+# non-zero, and it stops working silently after a Store repair or an update. A
+# node whose autostart pins that alias never comes back after a reboot - the only
+# trace is a truncated "Python " line in agent.log - so an alias is never
+# accepted here. Every candidate must be a real interpreter outside WindowsApps
+# that prints 3 for sys.version_info[0] and whose own sys.executable does not
+# resolve back into WindowsApps.
+$WindowsAppsMarker = "\WindowsApps\"
+
+function Test-RealPython {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if ($Path -like "*$WindowsAppsMarker*") { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        # Two answers in one probe: the major version, and the interpreter the
+        # alias would actually run (an alias reports a WindowsApps path there).
+        $probe = @(& $Path -c "import sys; print(sys.version_info[0]); print(sys.executable)" 2>&1)
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $rows = @($probe | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+        if ($rows.Count -lt 1 -or "$($rows[0])" -ne "3") { return $false }
+        if ($rows.Count -ge 2 -and "$($rows[1])" -like "*$WindowsAppsMarker*") { return $false }
+        return $true
+    } catch { return $false }
+}
+
+function Test-PythonWebsockets {
+    param([string]$Path)
+    try {
+        & $Path -c "import websockets" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+
+function Get-PythonCandidates {
+    $list = @()
+    # Every "python" on PATH, not just the first: the first hit is usually the
+    # Store alias while a real install sits further down the same PATH.
+    foreach ($cmd in @(Get-Command python -All -ErrorAction SilentlyContinue)) {
+        if ($cmd -and $cmd.Source) { $list += $cmd.Source }
+    }
+    $list += @(
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python311\python.exe"
+    )
+    # Any per-user 3.x the python.org installer left behind, newest first. This
+    # used to be a second, separate fallback that forgot to record the path it
+    # found, so a machine with only 3.13 was pushed into a fresh download.
+    $localRoot = "$env:LOCALAPPDATA\Programs\Python"
+    if (Test-Path -LiteralPath $localRoot) {
+        $list += @(Get-ChildItem -Path $localRoot -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'python.exe' })
+    }
+    # The "py" launcher is not an interpreter: ask it which real python.exe it
+    # runs, so the autostart entry always names a python.exe, never "py -3".
+    $cmdPy = Get-Command py -ErrorAction SilentlyContinue
+    if ($cmdPy -and $cmdPy.Source) {
+        try {
+            $real = @(& $cmdPy.Source -3 -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $real.Count -ge 1 -and "$($real[0])".Trim()) {
+                $list += "$($real[0])".Trim()
+            }
+        } catch {}
+    }
+    return @($list | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Select-RealPython {
+    # An interpreter that already has websockets wins: the dependency step then
+    # cannot silently install into a different, more fragile Python.
+    $fallback = $null
+    foreach ($cand in (Get-PythonCandidates)) {
+        if (-not (Test-RealPython $cand)) { continue }
+        if (Test-PythonWebsockets $cand) { return $cand }
+        if (-not $fallback) { $fallback = $cand }
+    }
+    return $fallback
+}
+
+function Add-PythonToPath {
+    param([string]$Path)
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and ($env:Path -notlike "*$dir*")) {
+        $env:Path = "$dir;$dir\Scripts;$env:Path"
+    }
+}
+
 $hasPython = $false
 $PyExe = $null
-$candidates = @()
-$cmdPython = Get-Command python -ErrorAction SilentlyContinue
-if ($cmdPython) { $candidates += $cmdPython.Source }
-$candidates += @(
-    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-    "$env:ProgramFiles\Python312\python.exe",
-    "$env:ProgramFiles\Python311\python.exe"
-)
-$cmdPy = Get-Command py -ErrorAction SilentlyContinue
-if ($cmdPy) { $candidates += $cmdPy.Source }
-
-foreach ($cand in $candidates) {
-    if (-not $cand -or -not (Test-Path $cand)) { continue }
-    try {
-        # Require a working sys import, not just a zero exit code.
-        $probe = & $cand -c "import sys; print(sys.version_info[0])" 2>&1
-        if ($LASTEXITCODE -eq 0 -and "$probe".Trim() -eq "3") {
-            if ((Split-Path $cand -Leaf) -eq "py.exe") { $PyExe = "$cand -3" } else { $PyExe = $cand }
-            $pyVer = & $cand --version 2>&1
-            if ($Lang -eq "ru") {
-                Write-Host "[1/3] Python обнаружен: $pyVer" -ForegroundColor Green
-            } else {
-                Write-Host "[1/3] Python detected: $pyVer" -ForegroundColor Green
-            }
-            $hasPython = $true
-            break
-        }
-    } catch { continue }
-}
-
-if (-not $hasPython) {
-    # Any per-user 3.x the python.org installer left behind, newest first. The
-    # check used to be hardcoded to 3.12/3.11 *and* forgot to record the path it
-    # found, so a machine with only 3.13 was pushed into a fresh download, and
-    # one without "python" on PATH then fell back to the bare name anyway.
-    $localRoot = "$env:LOCALAPPDATA\Programs\Python"
-    $foundPy = @()
-    if (Test-Path $localRoot) {
-        $foundPy = Get-ChildItem -Path $localRoot -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName 'python.exe' } |
-            Where-Object { Test-Path $_ }
+$PyExe = Select-RealPython
+if ($PyExe) {
+    Add-PythonToPath $PyExe
+    $hasPython = $true
+    $pyVer = & $PyExe --version 2>&1
+    if ($Lang -eq "ru") {
+        Write-Host "[1/3] Python обнаружен: $pyVer ($PyExe)" -ForegroundColor Green
+    } else {
+        Write-Host "[1/3] Python detected: $pyVer ($PyExe)" -ForegroundColor Green
     }
-    if ($foundPy.Count -gt 0) {
-        $localPyDir = Split-Path -Parent $foundPy[0]
-        $PyExe = $foundPy[0]
-        $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
-        $hasPython = $true
+    if (-not (Test-PythonWebsockets $PyExe)) {
         if ($Lang -eq "ru") {
-            Write-Host "[1/3] Python обнаружен: $PyExe" -ForegroundColor Green
+            Write-Host "[1/3] В выбранном Python нет websockets - он будет установлен на шаге 2." -ForegroundColor DarkYellow
         } else {
-            Write-Host "[1/3] Python detected: $PyExe" -ForegroundColor Green
+            Write-Host "[1/3] The selected Python has no websockets yet - it will be installed in step 2." -ForegroundColor DarkYellow
         }
     }
+} elseif ($Lang -eq "ru") {
+    Write-Host "[1/3] Рабочий Python 3 не найден (ярлык Microsoft Store за интерпретатор не считается)." -ForegroundColor Yellow
+} else {
+    Write-Host "[1/3] No working Python 3 found (the Microsoft Store alias does not count)." -ForegroundColor Yellow
 }
+
 
 # ------------------------------------------------------------------------------
 #  PUBLIC DOMAIN - resolved from the one source of truth
@@ -246,12 +305,26 @@ if ($DryRun) {
     }
     $pyState = if ($hasPython) { $PyExe } else { "not found" }
     $domainState = if ($DomainMissing) { "NOT CONFIGURED" } else { $Gateway }
+    # The live node state, so a preflight can say "your node is offline right now"
+    # before anything on disk is touched. The name may still gain a suffix at
+    # registration (auto_suffix), so this stays best effort.
+    $nodeState = "not checked"
+    if (-not $DomainMissing) {
+        $probeNode = if ($User) { $User } else { $Hostname }
+        try {
+            $probeHealth = Invoke-RestMethod -Uri "https://$Gateway/health?user=$probeNode" -TimeoutSec 5 -ErrorAction Stop
+            $nodeState = if ($probeHealth.node_online) { "online ($probeNode)" } else { "offline ($probeNode)" }
+        } catch {
+            $nodeState = "gateway unreachable"
+        }
+    }
     if ($Lang -eq "ru") {
         Write-Host "[DRY-RUN] Python      : $pyState"
         Write-Host "[DRY-RUN] websockets  : $wsState"
         Write-Host "[DRY-RUN] Домен       : $domainState"
         Write-Host "[DRY-RUN] Конфиг      : $env:USERPROFILE\.config\antigravity-mesh"
         Write-Host "[DRY-RUN] Автозапуск  : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
+        Write-Host "[DRY-RUN] Узел        : $nodeState"
         Write-Host "[DRY-RUN] Действий не выполнено." -ForegroundColor Yellow
     } else {
         Write-Host "[DRY-RUN] Python      : $pyState"
@@ -259,6 +332,7 @@ if ($DryRun) {
         Write-Host "[DRY-RUN] Domain      : $domainState"
         Write-Host "[DRY-RUN] Config      : $env:USERPROFILE\.config\antigravity-mesh"
         Write-Host "[DRY-RUN] Autostart   : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
+        Write-Host "[DRY-RUN] Node        : $nodeState"
         Write-Host "[DRY-RUN] Nothing was changed." -ForegroundColor Yellow
     }
     if ($DomainMissing -or -not $hasPython) { exit 2 }
@@ -296,6 +370,44 @@ if (-not $hasPython) {
             exit 1
         }
     }
+    # Re-resolve with exactly the same rules: a fresh interpreter only counts if it
+    # is a real python.exe outside WindowsApps and it actually runs.
+    if (-not $hasPython) {
+        $PyExe = Select-RealPython
+        if ($PyExe) {
+            Add-PythonToPath $PyExe
+            $hasPython = $true
+            if ($Lang -eq "ru") {
+                Write-Host "[1/3] Python обнаружен: $PyExe" -ForegroundColor Green
+            } else {
+                Write-Host "[1/3] Python detected: $PyExe" -ForegroundColor Green
+            }
+        }
+    }
+}
+
+# Fail closed. Without a real interpreter the autostart entry points at nothing and
+# the node stays offline until a human reads the log - the exact state the
+# Microsoft Store alias produced, where the only trace was one torn log line.
+if (-not $hasPython -or -not $PyExe) {
+    if ($Lang -eq "ru") {
+        Write-Host "[!] Рабочий Python 3 не найден." -ForegroundColor Red
+        Write-Host "    Установите Python с python.org (НЕ из Microsoft Store) и повторите установку." -ForegroundColor Yellow
+        Write-Host "    Остановка: без интерпретатора автозапуск узла работать не будет." -ForegroundColor Yellow
+    } else {
+        Write-Host "[!] No working Python 3 found." -ForegroundColor Red
+        Write-Host "    Install Python from python.org (NOT from the Microsoft Store) and re-run." -ForegroundColor Yellow
+        Write-Host "    Stopping: an autostart entry without an interpreter can never work." -ForegroundColor Yellow
+    }
+    exit 1
+}
+if ("$PyExe" -like "*$WindowsAppsMarker*") {
+    if ($Lang -eq "ru") {
+        Write-Host "[!] Отказ: выбранный интерпретатор - ярлык Microsoft Store ($PyExe)." -ForegroundColor Red
+    } else {
+        Write-Host "[!] Refusing to use the Microsoft Store alias as the interpreter ($PyExe)." -ForegroundColor Red
+    }
+    exit 1
 }
 
     # Install dependencies.
@@ -349,8 +461,13 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
     $BootstrapDir = "$env:USERPROFILE\.gemini-computer-use"
     $CoreDir = "$BootstrapDir\core"
     $SkillsDir = "$BootstrapDir\skills"
+    # The watchdog and the doctor are fetched too: the scheduled task registered
+    # below runs the watchdog, and a node whose agent dies must be able to heal
+    # itself without anyone re-running the installer by hand.
+    $OpsDir = "$BootstrapDir\ops\windows"
     if (!(Test-Path $CoreDir)) { New-Item -ItemType Directory -Path $CoreDir -Force | Out-Null }
     if (!(Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir -Force | Out-Null }
+    if (!(Test-Path $OpsDir)) { New-Item -ItemType Directory -Path $OpsDir -Force | Out-Null }
     
     $files = @(
         "core/agent.py",
@@ -360,7 +477,9 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
         "core/domain.py",
         "core/vitals.py",
         "core/__init__.py",
-        "skills/orchestrator.md"
+        "skills/orchestrator.md",
+        "ops/windows/agent-watchdog.ps1",
+        "ops/doctor.ps1"
     )
     foreach ($f in $files) {
         $dest = "$BootstrapDir\$($f -replace '/', '\')"
@@ -573,11 +692,17 @@ $env:MESH_USER = $AssignedUser
 $env:MESH_TOKEN = $AssignedToken
 
     # Create Windows Startup launcher for persistent autostart.
-    # The interpreter is pinned by full path: relying on PATH breaks when the
-    # Microsoft Store "python" alias is present or PATH changes between sessions.
+    # The interpreter is pinned by full path because PATH may hold the Microsoft
+    # Store alias, which stops working after a Store repair or an update. "-u"
+    # keeps stdout unbuffered, so a killed process cannot leave a torn log line as
+    # the only evidence of what happened.
+    if (-not $pyExeOnly -or "$pyExeOnly" -like "*$WindowsAppsMarker*") {
+        Write-Host "[!] Refusing to write an autostart entry for '$pyExeOnly'." -ForegroundColor Red
+        exit 1
+    }
     $startupDir = [Environment]::GetFolderPath("Startup")
     $startupVbs = "$startupDir\antigravity-agent.vbs"
-    $pyExeForVbs = if ($pyExeOnly) { $pyExeOnly } else { "python" }
+    $pyExeForVbs = $pyExeOnly
     $agentLog = "$ConfigDir\agent.log"
     @"
     Set WshShell = CreateObject("WScript.Shell")
@@ -586,11 +711,79 @@ $env:MESH_TOKEN = $AssignedToken
     WshShell.Environment("PROCESS")("MESH_TOKEN") = "$AssignedToken"
     WshShell.CurrentDirectory = "$ScriptDir"
     ' Log the output so a silent autostart failure can be diagnosed later.
-    WshShell.Run "cmd /c """"$pyExeForVbs"" -m core.agent >> """"$agentLog"""" 2>&1""", 0, False
+    WshShell.Run "cmd /c """"$pyExeForVbs"" -u -m core.agent >> """"$agentLog"""" 2>&1""", 0, False
 "@ | Out-File -FilePath $startupVbs -Encoding Unicode
 
+# A Startup entry runs once per logon: it cannot recover a node whose agent died
+# (crash, Windows Update reboot, broken dependency). A Scheduled Task repeats the
+# watchdog every five minutes, so a dead agent comes back on its own.
+$watchdog = Join-Path $ScriptDir 'ops\windows\agent-watchdog.ps1'
+if (Test-Path -LiteralPath $watchdog) {
+    # Two spellings of the same action, because the two registration paths parse
+    # quotes differently: schtasks.exe needs the quotes around the script path
+    # backslash-escaped (otherwise a profile path with a space is split into two
+    # arguments and the task is rejected outright), while the ScheduledTasks
+    # cmdlets take the argument literally.
+    $watchdogActionCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $watchdog + '" -Quiet'
+    $watchdogTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $watchdog + '\" -Quiet'
+    $watchdogRegistered = $false
+    $watchdogError = ''
+    # schtasks.exe is tried first because it registers a task for the CURRENT user
+    # without elevation, while Register-ScheduledTask needs write access to the task
+    # store (denied for a normal user on a hardened or domain-joined machine - that
+    # was measured on the machine this watchdog was built for). The minute schedule
+    # repeats indefinitely, so logon is already covered by the Startup entry above
+    # and needs no second trigger here.
+    $watchdogError = (& schtasks.exe /Create /TN 'AntigravityMeshWatchdog' /TR $watchdogTaskCommand `
+        /SC MINUTE /MO 5 /F 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) { $watchdogRegistered = $true }
+    if (-not $watchdogRegistered) {
+        try {
+            $watchdogAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $watchdogActionCommand -WorkingDirectory $ScriptDir
+            # No -RepetitionDuration on purpose: PowerShell serialises
+            # [TimeSpan]::MaxValue as P99999999DT23H59M59S, which the Task Scheduler
+            # schema rejects outright; an omitted duration means "repeat
+            # indefinitely", which is exactly what this needs.
+            $watchdogTriggers = @(
+                (New-ScheduledTaskTrigger -AtLogOn),
+                (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
+            )
+            $watchdogSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+            Register-ScheduledTask -TaskName 'AntigravityMeshWatchdog' -Action $watchdogAction `
+                -Trigger $watchdogTriggers -Settings $watchdogSettings -Force `
+                -Description 'Restarts the Antigravity Mesh node agent when it dies.' | Out-Null
+            $watchdogRegistered = $true
+            $watchdogError = ''
+        } catch {
+            $watchdogRegistered = $false
+            $watchdogError = $_.Exception.Message
+        }
+    }
+    if ($watchdogRegistered) {
+        if ($Lang -eq "ru") {
+            Write-Host "[OK] Задача-сторож 'AntigravityMeshWatchdog' зарегистрирована (каждые 5 минут)." -ForegroundColor Green
+        } else {
+            Write-Host "[OK] Watchdog task 'AntigravityMeshWatchdog' registered (every 5 minutes)." -ForegroundColor Green
+        }
+    } else {
+        if ($Lang -eq "ru") {
+            Write-Host "[!] Не удалось зарегистрировать задачу-сторож. Автозапуск при входе в систему всё равно создан." -ForegroundColor Yellow
+            Write-Host "    Запустить проверку вручную: $watchdog" -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] Could not register the watchdog task. The Startup entry still starts the agent at logon." -ForegroundColor Yellow
+            Write-Host "    Run the check by hand: $watchdog" -ForegroundColor Yellow
+        }
+        if ($watchdogError) { Write-Host "    $watchdogError" -ForegroundColor DarkYellow }
+    }
+} elseif ($Lang -eq "ru") {
+    Write-Host "[!] $watchdog не найден: самовосстановления у узла не будет." -ForegroundColor Yellow
+} else {
+    Write-Host "[!] $watchdog not found: the node has no self-healing task." -ForegroundColor Yellow
+}
+
 # Launch now
-Start-Process $pyExeOnly -ArgumentList "-m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
+Start-Process $pyExeOnly -ArgumentList "-u -m core.agent" -WorkingDirectory $ScriptDir -WindowStyle Hidden
 
 Clear-Host
 
@@ -614,4 +807,39 @@ if ($Lang -eq "ru") {
     Write-Host " 2. Click 'Add app' (or navigate to MCP settings)"
     Write-Host " 3. Paste the URL into the 'Server URL' field (Ctrl+V) and click Connect." -ForegroundColor White
     Write-Host ""
+}
+
+# ------------------------------------------------------------------------------
+# Post-install check. An install that looks successful while the agent never
+# connects is what leaves a client with an opaque frontend error, so the node's
+# state is verified here and reported with the interpreter and the log to read.
+#
+# Deliberately no non-zero exit code: install-gui.ps1 only extracts the MCP URL
+# from a successful run, and that link matters most exactly when the node is not
+# up yet. The watchdog task retries every five minutes in the meantime.
+# ------------------------------------------------------------------------------
+$NodeOnline = $false
+for ($attempt = 1; $attempt -le 15; $attempt++) {
+    Start-Sleep -Seconds 2
+    try {
+        $health = Invoke-RestMethod -Uri "$PublicBaseUrl/health?user=$AssignedUser" -TimeoutSec 10 -ErrorAction Stop
+        if ($health.node_online) { $NodeOnline = $true; break }
+    } catch {}
+}
+if ($NodeOnline) {
+    if ($Lang -eq "ru") {
+        Write-Host "[OK] Узел '$AssignedUser' на связи со шлюзом." -ForegroundColor Green
+    } else {
+        Write-Host "[OK] Node '$AssignedUser' is online on the gateway." -ForegroundColor Green
+    }
+} elseif ($Lang -eq "ru") {
+    Write-Host "[!] Узел '$AssignedUser' не вышел на связь за 30 с." -ForegroundColor Red
+    Write-Host "    Интерпретатор автозапуска: $pyExeOnly" -ForegroundColor Yellow
+    Write-Host "    Смотрите хвост $agentLog и запустите .\ops\doctor.ps1" -ForegroundColor Yellow
+    Write-Host "    Задача 'AntigravityMeshWatchdog' повторит попытку через 5 минут." -ForegroundColor Yellow
+} else {
+    Write-Host "[!] Node '$AssignedUser' did not come online within 30 s." -ForegroundColor Red
+    Write-Host "    Autostart interpreter: $pyExeOnly" -ForegroundColor Yellow
+    Write-Host "    Read the tail of $agentLog and run .\ops\doctor.ps1" -ForegroundColor Yellow
+    Write-Host "    The 'AntigravityMeshWatchdog' task retries every 5 minutes." -ForegroundColor Yellow
 }

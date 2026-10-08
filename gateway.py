@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from collections import deque
 from contextlib import asynccontextmanager
 import datetime
 import hmac
@@ -27,10 +28,80 @@ logger = logging.getLogger("gateway")
 
 REGISTRY_PATH = "/etc/antigravity-mesh/registry.json"
 active_tunnels = {}  # user -> {"ws": WebSocket, "pending": {req_id: Future}}
-active_sse_subscribers = {}  # user -> set of asyncio.Queue
-active_sse_sessions = {}  # session_id -> asyncio.Queue
+# user -> list of asyncio.Queue, OLDEST stream first. This was a set, which has
+# no order: the per-user cap below has to evict the OLDEST stream, and every
+# other reader (broadcast, /health, the watchdog) only iterates or measures the
+# container, so the type change stays invisible outside this module.
+active_sse_subscribers = {}
+active_sse_sessions = {}  # per-connection stream_key -> asyncio.Queue
+# client-visible session id -> queues opened under it. active_sse_sessions is
+# keyed per CONNECTION on purpose (one DELETE must not close a stream another
+# connection is still reading), so this second index is what lets a
+# re-initialize close exactly the streams of the session it replaces.
+active_sse_session_queues = {}
 active_sessions = {}  # session_id -> user, issued once per initialize
 latest_session_by_user = {}  # user -> most recently issued session id
+
+# A client that lost its session id opens a new stream every turn and never
+# closes the old one (observed: 9 abandoned streams for one user while no tunnel
+# was connected). Nothing above this many streams for one user is kept: the
+# oldest is closed, because the newest is the one the client just opened.
+# MESH_MAX_SSE_PER_USER raises the cap for a deployment whose clients legitimately
+# keep several streams open; the default stays deliberately small.
+try:
+    MAX_SSE_PER_USER = max(1, int(os.environ.get("MESH_MAX_SSE_PER_USER") or "2"))
+except (TypeError, ValueError):
+    MAX_SSE_PER_USER = 2
+
+# Tunnel lifecycle history for /health. "node_online: false" alone does not say
+# WHEN the node was last seen, which is the first question after an unexpected
+# reboot; the ring buffer is bounded so a long-lived gateway cannot grow.
+last_tunnel_seen = None  # ISO-8601 timestamp of the last successful connection
+TUNNEL_EVENTS_MAX = 10
+tunnel_events = deque(maxlen=TUNNEL_EVENTS_MAX)  # newest last
+
+
+def record_tunnel_event(event: str, user: str, reason: str = "") -> None:
+    """Record one tunnel connect/disconnect and stamp the last connect time."""
+    global last_tunnel_seen
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if event == "connect":
+        last_tunnel_seen = ts
+    tunnel_events.append({"ts": ts, "event": event, "user": user, "reason": reason})
+
+
+def forget_sse_queue(user: str, queue) -> None:
+    """Unregister a queue from the per-user list and from the session index.
+
+    Shared by the stream's own cleanup and the DELETE teardown so both keep the
+    two containers in step; a stream that is still registered after it stopped
+    being readable is exactly the leak ``/health`` is meant to expose.
+    """
+    subscribers = active_sse_subscribers.get(user)
+    if subscribers is not None and queue in subscribers:
+        subscribers.remove(queue)
+    for session_id, queues in list(active_sse_session_queues.items()):
+        if queue in queues:
+            queues.remove(queue)
+            if not queues:
+                active_sse_session_queues.pop(session_id, None)
+
+
+def close_sse_streams_for_session(session_id: str) -> int:
+    """Close every SSE stream opened under a session id that is now superseded.
+
+    ``None`` is the sentinel the stream loop treats as "close this stream", the
+    same one the DELETE teardown and the per-user cap use; the stream's own
+    ``finally`` does the unregistering, so nothing is removed here. Returns how
+    many streams were asked to close.
+    """
+    queues = active_sse_session_queues.pop(session_id, [])
+    for queue in queues:
+        try:
+            queue.put_nowait(None)
+        except Exception:
+            pass
+    return len(queues)
 
 # Negotiated protocol version per user. The value must be identical in the
 # initialize result AND in the mcp-protocol-version header of every response: a
@@ -302,7 +373,12 @@ async def call_remote_tool(user: str, name: str, args: dict) -> dict:
         # The agent reconnects within ~2s of a dropped link (VPN flap, network
         # change, service restart), so give it a moment instead of reporting the
         # node as offline immediately. A missing agent is then a rare answer.
-        for _ in range(16):                      # up to ~8 seconds
+        #
+        # A host reboot is NOT a flap, though: the agent stays away for minutes,
+        # while the client's own frontend gives a tool call roughly 30 s. Waiting
+        # 8 s only made the eventual failure arrive later. 4 x 0.5 s covers a real
+        # reconnect and keeps the whole tools/call path within ~5 s.
+        for _ in range(4):                       # up to ~2 seconds
             await asyncio.sleep(0.5)
             tunnel = active_tunnels.get(user)
             if tunnel and tunnel.get("ws"):
@@ -311,9 +387,9 @@ async def call_remote_tool(user: str, name: str, args: dict) -> dict:
         return {
             "exit_code": 1,
             "stdout": "",
-            "stderr": (f"[Mesh Gateway] Node '{user}' did not come back within 8 seconds - the agent "
-                       f"on the host is not connected. Start/restart the mesh agent there, then retry; "
-                       f"this is a transport problem, not a missing file or permission.")
+            "stderr": (f"[Mesh Gateway] Node '{user}' has no active tunnel: the mesh agent on the "
+                       f"host is not connected to the gateway. Start/restart the mesh agent there, "
+                       f"then retry; this is a transport problem, not a missing file or permission.")
         }
     req_id = str(uuid.uuid4())
     fut = asyncio.get_running_loop().create_future()
@@ -338,7 +414,7 @@ async def call_remote_tool(user: str, name: str, args: dict) -> dict:
         # Wait for the agent to come back and replay the call once instead of
         # failing the client's request.
         logger.warning(f"Tunnel call to '{user}' failed ({e}); waiting for reconnect and retrying once")
-        for _ in range(20):                      # up to ~10 seconds
+        for _ in range(4):                       # up to ~2 seconds
             await asyncio.sleep(0.5)
             fresh = active_tunnels.get(user)
             if fresh and fresh.get("ws") and fresh.get("ws") is not tunnel.get("ws"):
@@ -393,8 +469,16 @@ async def health(request: Request):
         "active_tunnels_count": len(active_tunnels),
         # Diagnostics: an abandoned SSE stream keeps a queue alive, and a client
         # with a connection cap would then be unable to open a new one.
+        # `open_sse_streams` is the total, `streams_per_user` the same count
+        # broken down per node - both unchanged in meaning, now fed by the
+        # insertion-ordered per-user container.
         "open_sse_streams": sum(len(q) for q in active_sse_subscribers.values()),
         "streams_per_user": {u: len(q) for u, q in active_sse_subscribers.items()},
+        # Tunnel lifecycle. `node_online: false` does not say when the node was
+        # last seen, which is what tells a reboot apart from a network flap;
+        # `tunnel_events` keeps the last 10 connect/disconnect events and why.
+        "last_tunnel_seen": last_tunnel_seen,
+        "tunnel_events": list(tunnel_events),
     }, headers={"Access-Control-Allow-Origin": "*"})
 
 async def api_register(request: Request):
@@ -597,36 +681,82 @@ async def sse_endpoint(request: Request):
     # the stream over it - the stream it was reading tool results from.
     announce_endpoint = announce_endpoint_for_path(request.url.path)
     queue = asyncio.Queue()
-    if user not in active_sse_subscribers:
-        active_sse_subscribers[user] = set()
-    active_sse_subscribers[user].add(queue)
+    queues = active_sse_subscribers.setdefault(user, [])
+    queues.append(queue)
+    # Cap the streams one user may hold. Nothing in the protocol closes a stream
+    # a client forgot, so a client whose session id was lost (or that reconnects
+    # on every turn) accumulates queues until its own connection limit is reached
+    # and it can no longer open one at all. Evicting the OLDEST is safe: the
+    # newest is the stream the client just opened and is actually reading.
+    evicted = 0
+    while len(queues) > MAX_SSE_PER_USER:
+        oldest = queues.pop(0)
+        evicted += 1
+        try:
+            oldest.put_nowait(None)      # sentinel: the stream loop closes on None
+        except Exception:
+            pass
+        # Also drop it from the session index now, so /health and a later
+        # re-initialize never see a stream that was already closed.
+        forget_sse_queue(user, oldest)
     # stored under the per-connection key, not the shared client-visible id
     active_sse_sessions[stream_key] = queue
+    # ...and indexed by the client-visible session id, so a re-initialize can
+    # close exactly the streams of the session it replaces.
+    active_sse_session_queues.setdefault(session_id, []).append(queue)
     logger.info(
         f"SSE stream opened for '{user}' (stream_key={stream_key}, "
         f"session={session_id[:12]}…, path={request.url.path}, "
-        f"open_now={len(active_sse_subscribers[user])})"
+        f"open_now={len(queues)}"
+        + (f", evicted={evicted} over the cap of {MAX_SSE_PER_USER}" if evicted else "")
+        + ")"
     )
 
     async def event_generator():
+        # Keepalive deadline: intermediaries (nginx, Google's frontend) close an
+        # idle stream, and a closed stream is what makes a client believe the
+        # server went away. One frame - a comment counts - goes out at least every
+        # 15 s. Framing is untouched: `event: endpoint` once, then one
+        # `event: message` per queued frame.
+        keepalive_interval = 15.0
+        last_write = time.monotonic()
         try:
             if announce_endpoint:
                 yield f"event: endpoint\ndata: /messages?user={user}&token={token}\n\n"
             while True:
                 try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    if msg is None:
-                        break
-                    yield f"event: message\ndata: {msg}\n\n"
+                    remaining = keepalive_interval - (time.monotonic() - last_write)
+                    msg = await asyncio.wait_for(queue.get(), timeout=max(0.25, remaining))
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    try:
+                        yield ": keepalive\n\n"
+                    except Exception as exc:
+                        # The write raised: nobody is reading this stream any
+                        # more, so drop it instead of keeping the queue alive.
+                        logger.warning(f"SSE keepalive write failed for '{user}' "
+                                       f"(stream_key={stream_key}): {exc}")
+                        break
+                    last_write = time.monotonic()
+                    continue
+                except Exception as exc:
+                    logger.warning(f"SSE queue unreadable for '{user}' "
+                                   f"(stream_key={stream_key}): {exc}")
+                    break
+                if msg is None:
+                    break
+                try:
+                    yield f"event: message\ndata: {msg}\n\n"
+                except Exception as exc:
+                    logger.warning(f"SSE write failed for '{user}' "
+                                   f"(stream_key={stream_key}): {exc}")
+                    break
+                last_write = time.monotonic()
         except asyncio.CancelledError:
             logger.info(f"SSE stream cancelled for '{user}' (stream_key={stream_key})")
             raise
         finally:
             active_sse_sessions.pop(stream_key, None)
-            if user in active_sse_subscribers and queue in active_sse_subscribers[user]:
-                active_sse_subscribers[user].remove(queue)
+            forget_sse_queue(user, queue)
             logger.info(f"SSE stream closed for '{user}' (stream_key={stream_key}, "
                         f"open_now={len(active_sse_subscribers.get(user, ()))})")
 
@@ -724,6 +854,20 @@ async def messages_endpoint(request: Request):
         else:
             negotiated = "2024-11-05"
         active_protocol_versions[user] = negotiated
+        # Session hygiene: this initialize replaces whatever session this user
+        # held before, and the client will never use that id again. Leaving its
+        # streams open is how one user ended up with 9 live streams and no
+        # tunnel - the client lost the session id, re-initialized every turn, and
+        # every abandoned stream stayed registered (and counted in /health).
+        # The response-header contract is untouched: the NEW id is what this
+        # response returns.
+        previous_session_id = latest_session_by_user.get(user)
+        if previous_session_id:
+            closed = close_sse_streams_for_session(previous_session_id)
+            active_sessions.pop(previous_session_id, None)
+            if closed:
+                logger.info(f"initialize: closed {closed} superseded SSE stream(s) of session "
+                            f"{previous_session_id[:12]}… for user '{user}'")
         session_id = issue_session_id(user)
         issued_session_id = session_id
         logger.info(f"initialize: client requested protocolVersion={client_version!r} "
@@ -1373,14 +1517,19 @@ async def mcp_unified_endpoint(request: Request):
         # that another in-flight request is still reading.
         active_sessions.pop(session_id, None)
 
-        # Clean up session queue if active
+        # Clean up session queue if active. The lookup stays keyed per connection
+        # (see above): a DELETE closes the stream whose key it names, never
+        # another connection's. The queue is unregistered from the per-user list
+        # and the session index here as well, so /health stays truthful even if
+        # the stream generator never resumes to run its own cleanup.
         if session_id in active_sse_sessions:
             q = active_sse_sessions.pop(session_id, None)
-            if q:
+            if q is not None:
                 try:
                     q.put_nowait(None)
                 except Exception:
                     pass
+                forget_sse_queue(user, q)
 
         return Response(
             status_code=204,
@@ -1469,7 +1618,11 @@ async def ws_tunnel_endpoint(websocket: WebSocket):
     logger.info(f"Agent tunnel connected for user '{user}'")
     tunnel_data = {"ws": websocket, "pending": {}}
     active_tunnels[user] = tunnel_data
+    # The agent is connected: this is the timestamp /health reports as
+    # last_tunnel_seen, and the event that tells a reboot apart from a flap.
+    record_tunnel_event("connect", user, "agent connected")
 
+    disconnect_reason = "tunnel closed"
     try:
         while True:
             raw = await websocket.receive_text()
@@ -1483,10 +1636,19 @@ async def ws_tunnel_endpoint(websocket: WebSocket):
                 if not fut.done():
                     fut.set_result(msg)
     except WebSocketDisconnect:
+        disconnect_reason = "websocket disconnected"
         logger.info(f"Agent tunnel disconnected for user '{user}'")
+    except Exception as exc:
+        disconnect_reason = f"tunnel error: {type(exc).__name__}"
+        logger.warning(f"Agent tunnel error for user '{user}': {exc}")
+        raise
     finally:
         if active_tunnels.get(user, {}).get("ws") == websocket:
             active_tunnels.pop(user, None)
+            # Only the tunnel that is still the active one is reported here: if
+            # the watchdog already removed it as stale, or a newer connection
+            # replaced it, that path has its own event and this one is noise.
+            record_tunnel_event("disconnect", user, disconnect_reason)
 
 
 # ---------------------------------------------------------------------------
@@ -1694,9 +1856,15 @@ async def tunnel_watchdog():
                         if not fut.done():
                             fut.set_exception(ConnectionResetError("Tunnel was stale"))
                     active_tunnels.pop(user, None)
-            # drop subscriber queues that no stream is reading any more
+                    # The stale path is a real disconnect: without this event the
+                    # history would show a connect with no matching disconnect
+                    # after a host reboot or a NAT timeout.
+                    record_tunnel_event("disconnect", user, f"stale tunnel (state={state})")
+            # drop subscriber queues that no stream is reading any more. The
+            # per-user container is an ordered list, so the surviving queues keep
+            # their order (oldest first) for the next cap eviction.
             for user, queues in list(active_sse_subscribers.items()):
-                alive = {q for q in queues if not q.empty() or q in active_sse_sessions.values()}
+                alive = [q for q in queues if not q.empty() or q in active_sse_sessions.values()]
                 if alive != queues:
                     active_sse_subscribers[user] = alive
                 if not alive:

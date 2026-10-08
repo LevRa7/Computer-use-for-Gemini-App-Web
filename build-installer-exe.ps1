@@ -30,14 +30,17 @@ if (-not $OutputDir) { $OutputDir = Join-Path $repo 'dist' }
 
 # --- what goes inside the executable -----------------------------------------
 # install-gui.ps1 is the entry point; install.ps1 is the actual installer; core/
-# is what the node runs and what the SSH variant ships; skills/ travels with it.
+# is what the node runs and what the SSH variant ships; skills/ travels with it;
+# ops/ carries the Windows watchdog and the doctor that install.ps1 registers and
+# references, so a node installed from the executable can heal and be diagnosed.
 $PAYLOAD = @(
     'install-gui.ps1',
     'install-gui.strings.json',
     'install.ps1',
     'install.sh',
     'core',
-    'skills'
+    'skills',
+    'ops'
 )
 
 function Write-Step {

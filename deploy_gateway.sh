@@ -95,6 +95,13 @@ if [ "$WITH_NODE_CODE" = true ]; then
     for f in core/*.py skills/*.md; do
         [ -f "$f" ] && NODE_FILES+=("$f")
     done
+    # The Windows watchdog and the doctor ship with the node code: install.ps1
+    # registers the scheduled task that runs the watchdog and points the operator
+    # at the doctor, so a node that bootstraps itself from this domain must be able
+    # to download both.
+    for f in ops/windows/agent-watchdog.ps1 ops/doctor.ps1; do
+        [ -f "$f" ] && NODE_FILES+=("$f")
+    done
 fi
 
 for f in "${APP_FILES[@]}" "${WWW_FILES[@]}" ${NODE_FILES[@]+"${NODE_FILES[@]}"}; do
@@ -193,7 +200,7 @@ rsh "set -e
 systemctl cat $SERVICE >/dev/null 2>&1 || { echo 'service $SERVICE not found' >&2; exit 1; }
 [ -d $APP_DIR ] || { echo 'missing $APP_DIR' >&2; exit 1; }
 [ -d $WWW_DIR ] || { echo 'missing $WWW_DIR' >&2; exit 1; }
-mkdir -p $STAGE/core $STAGE/skills"
+mkdir -p $STAGE/core $STAGE/skills $STAGE/ops/windows"
 ok "gateway reachable, directories present"
 
 # 2) upload + on-host sha256 manifest verification -----------------------------
@@ -218,6 +225,7 @@ done
 [ -d $WWW_DIR/core ] && cp -a $WWW_DIR/core $BACKUP_ROOT/$TS/core || true
 [ -d $APP_DIR/core ] && cp -a $APP_DIR/core $BACKUP_ROOT/$TS/app-core || true
 [ -d $WWW_DIR/skills ] && cp -a $WWW_DIR/skills $BACKUP_ROOT/$TS/skills || true
+[ -d $WWW_DIR/ops ] && cp -a $WWW_DIR/ops $BACKUP_ROOT/$TS/ops || true
 [ -f /etc/antigravity-mesh/gateway.env ] && cp -a /etc/antigravity-mesh/gateway.env $BACKUP_ROOT/$TS/ || true
 true"
 ok "backup written to $BACKUP_ROOT/$TS"
@@ -257,7 +265,15 @@ fi"
 if [ "$WITH_NODE_CODE" = true ]; then
     rsh "set -e
 for f in $STAGE/core/*.py; do install -o root -g root -m 644 \"\$f\" $WWW_DIR/core/; done
-for f in $STAGE/skills/*.md; do install -o root -g root -m 644 \"\$f\" $WWW_DIR/skills/; done"
+for f in $STAGE/skills/*.md; do install -o root -g root -m 644 \"\$f\" $WWW_DIR/skills/; done
+if [ -f \"$STAGE/ops/windows/agent-watchdog.ps1\" ]; then
+    mkdir -p $WWW_DIR/ops/windows
+    install -o root -g root -m 644 \"$STAGE/ops/windows/agent-watchdog.ps1\" $WWW_DIR/ops/windows/agent-watchdog.ps1
+fi
+if [ -f \"$STAGE/ops/doctor.ps1\" ]; then
+    mkdir -p $WWW_DIR/ops
+    install -o root -g root -m 644 \"$STAGE/ops/doctor.ps1\" $WWW_DIR/ops/doctor.ps1
+fi"
 fi
 
 # The one place this host configures the domain. core/domain.py reads this file,

@@ -50,9 +50,20 @@ mesh_resolve_domain() {
     fi
 
     if [ -z "$value" ]; then
-        for candidate_python in python3 python; do
+        # Path candidates, in order. The Microsoft Store "python.exe" (and its
+        # python3.exe twin) is an App Execution Alias: it is on PATH, it prints
+        # nothing usable, and it stops working after a Store repair - the same trap
+        # the Windows installer refuses to pin into an autostart entry. Skipping it
+        # by path is what lets the real interpreter behind it be found, or makes the
+        # resolver refuse honestly instead of trusting a stub.
+        local resolved_python=""
+        for candidate_python in python3 python py; do
             command -v "$candidate_python" >/dev/null 2>&1 || continue
-            value="$("$candidate_python" -c "import sys; sys.path.insert(0, r'$repo_dir'); from core import domain; print(domain.DEFAULT_PUBLIC_BASE_URL)" 2>/dev/null || true)"
+            resolved_python="$(command -v "$candidate_python")"
+            case "$resolved_python" in
+                *[Ww]indows[Aa]pps*) continue ;;
+            esac
+            value="$("$resolved_python" -c "import sys; sys.path.insert(0, r'$repo_dir'); from core import domain; print(domain.DEFAULT_PUBLIC_BASE_URL)" 2>/dev/null || true)"
             [ -n "$value" ] && { source="$repo_dir/core/domain.py default"; break; }
         done
     fi
