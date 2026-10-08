@@ -123,6 +123,27 @@ def _call_tool(tmp_path, monkeypatch, tool, args, remote_result=None):
     ("truncate -s 0 /var/log/app.log", "delete"),
     ("dd if=/dev/zero of=/dev/sdb", "delete"),
     ("mkfs.ext4 /dev/sdb1", "delete"),
+    # privilege escalation, whatever the command does with it (the more specific
+    # install/delete reason wins when both apply)
+    ("sudo systemctl restart nginx", "sudo"),
+    ("doas rc-service nginx restart", "sudo"),
+    ("pkexec visudo", "sudo"),
+    ("runas /user:Administrator cmd", "sudo"),
+    ('Start-Process powershell -Verb RunAs', "sudo"),
+    ("sudo apt-get install -y nginx", "install"),
+    ("sudo rm -rf /var/tmp/x", "delete"),
+    # a system path being modified (the specific delete reason wins where both fit)
+    ("echo hi > /etc/motd", "system"),
+    ("tee /etc/hosts", "system"),
+    ("cp /etc/hosts /tmp/h", "system"),
+    ("chmod 644 /etc/passwd", "system"),
+    ("sed -i 's/a/b/' /etc/nginx/nginx.conf", "system"),
+    ("rmdir /usr/local/lib/thing", "delete"),
+    ("Remove-Item C:\\Windows\\Temp\\x", "delete"),
+    ("Set-Content C:\\Windows\\Temp\\a.txt -Value x", "system"),
+    ("reg add HKLM\\Software\\Test /v a /d b", "system"),
+    ("Out-File -FilePath C:\\ProgramData\\app\\log.txt", "system"),
+    ("mv /opt/app/conf /opt/app/conf.bak", "system"),
     # structured wrappers must not hide the verb
     ('powershell -NoProfile -Command "npm install left-pad"', "install"),
     ('cmd /c "del C:\\temp\\a.txt"', "delete"),
@@ -149,9 +170,38 @@ def test_gated_commands_are_classified(command, kind):
     "docker ps",
     "git clean -n",
     "cat /var/log/app.log",
+    # reading the system is not a system change
+    "cat /etc/os-release",
+    "ls /usr/bin",
+    "grep -r server_name /etc/nginx",
+    "systemctl status nginx",
+    "Get-Content C:\\Windows\\win.ini",
+    "cat /etc/os-release > /tmp/os.txt",
+    # ordinary work outside the system
+    "mkdir /tmp/x",
+    "echo x > /tmp/out.txt",
+    "npm run build > build.log",
 ])
 def test_ordinary_commands_are_not_gated(command):
     assert gateway.classify_command(command) == ""
+
+
+@pytest.mark.parametrize("path,expected", [
+    (r"C:\Windows\System32\drivers\etc\hosts", True),
+    (r"C:\Program Files\App\config.ini", True),
+    (r"C:\ProgramData\App\config.ini", True),
+    ("/etc/nginx/nginx.conf", True),
+    ("/usr/local/bin/tool", True),
+    ("/boot/grub/grub.cfg", True),
+    ("/opt/antigravity-mesh/gateway.py", True),
+    (r"D:\MyProjects\app\main.py", False),
+    ("/home/user/app/main.py", False),
+    ("src/main.py", False),
+    ("build/output.log", False),
+    ("", False),
+])
+def test_system_paths_are_recognised(path, expected):
+    assert gateway.is_system_path(path) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +211,10 @@ def test_ordinary_commands_are_not_gated(command):
 @pytest.mark.parametrize("tool,args", [
     ("bash_exec", {"command": "apt-get install -y nginx"}),
     ("bash_exec", {"command": "rm -rf /tmp/build"}),
+    ("bash_exec", {"command": "sudo systemctl restart nginx"}),
+    ("bash_exec", {"command": "echo x > /etc/motd"}),
     ("run_job", {"command": "npm install"}),
+    ("run_job", {"command": "sudo apt-get upgrade -y"}),
 ])
 def test_gated_commands_never_reach_the_node(tmp_path, monkeypatch, tool, args):
     text, is_error, relay = _call_tool(tmp_path, monkeypatch, tool, args, {"stdout": "should not run"})
@@ -181,6 +234,58 @@ def test_an_ordinary_command_still_runs_through_bash_exec(tmp_path, monkeypatch)
     assert is_error is False
     assert "clean" in text
     assert [call[1] for call in relay.calls] == ["bash_exec"]
+
+
+def test_reading_a_system_path_still_runs(tmp_path, monkeypatch):
+    _, is_error, relay = _call_tool(
+        tmp_path, monkeypatch, "bash_exec", {"command": "cat /etc/os-release"},
+        {"stdout": "NAME=Debian", "stderr": "", "exit_code": 0})
+
+    assert is_error is False
+    assert [call[1] for call in relay.calls] == ["bash_exec"]
+
+
+# ---------------------------------------------------------------------------
+# file writes: ordinary paths stay silent, system paths need system_write
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tool,args", [
+    ("write_file", {"path": r"C:\Windows\Temp\agent.txt", "content": "x"}),
+    ("write_file", {"path": "/etc/motd", "content": "x"}),
+    ("edit_file", {"path": "/etc/nginx/nginx.conf", "old_string": "a", "new_string": "b"}),
+    ("edit_file", {"path": r"C:\ProgramData\App\conf.ini", "old_string": "a", "new_string": "b"}),
+])
+def test_file_writes_into_system_paths_never_reach_the_node(tmp_path, monkeypatch, tool, args):
+    text, is_error, relay = _call_tool(tmp_path, monkeypatch, tool, args, {"path": args["path"]})
+
+    assert is_error is True
+    assert "system_write" in text
+    assert "system path" in text
+    assert relay.calls == [], "%s forwarded a system write: %r" % (tool, relay.calls)
+
+
+def test_ordinary_file_writes_are_not_gated(tmp_path, monkeypatch):
+    text, is_error, relay = _call_tool(
+        tmp_path, monkeypatch, "write_file",
+        {"path": r"D:\MyProjects\app\main.py", "content": "x"},
+        {"path": r"D:\MyProjects\app\main.py", "bytes": 1, "sha256": "abc"})
+
+    assert is_error is False
+    assert [call[1] for call in relay.calls] == ["write_file"]
+
+
+def test_system_write_runs_through_the_node_write_file(tmp_path, monkeypatch):
+    text, is_error, relay = _call_tool(
+        tmp_path, monkeypatch, "system_write",
+        {"path": "/etc/motd", "content": "hello"},
+        {"path": "/etc/motd", "bytes": 5, "sha256": "abc"})
+
+    assert is_error is False
+    assert "confirmed system write" in text
+    assert len(relay.calls) == 1
+    _, name, args = relay.calls[0]
+    assert name == "write_file", "the node only ever sees its own write_file"
+    assert args["content"] == "hello"
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +339,19 @@ def test_system_change_is_advertised_as_destructive(tmp_path, monkeypatch):
     ))
     tools = {tool["name"]: tool for tool in json.loads(response.body)["result"]["tools"]}
 
-    assert tools["system_change"]["annotations"]["destructiveHint"] is True
-    assert tools["system_change"]["annotations"]["readOnlyHint"] is False
-    assert tools["bash_exec"]["annotations"]["readOnlyHint"] is True
-    assert tools["run_job"]["annotations"]["readOnlyHint"] is True
+    # Everything the operator did not ask to confirm is advertised read-only, which
+    # is the only hint Gemini Spark uses to skip its dialog.
+    for name in ("bash_exec", "run_job", "write_file", "edit_file", "job_kill",
+                 "share_file", "serve_dir"):
+        assert tools[name]["annotations"]["readOnlyHint"] is True, name
+        assert tools[name]["annotations"]["destructiveHint"] is False, name
+    for name in ("system_change", "system_write", "mesh_update", "unshare"):
+        assert tools[name]["annotations"]["destructiveHint"] is True, name
+        assert tools[name]["annotations"]["readOnlyHint"] is False, name
+
     # The model has to learn the rule from the descriptions too, not only from a
     # refusal it triggers by accident.
     assert "system_change" in tools["bash_exec"]["description"]
     assert "system_change" in tools["run_job"]["description"]
+    assert "system_write" in tools["write_file"]["description"]
+    assert "system_write" in tools["edit_file"]["description"]

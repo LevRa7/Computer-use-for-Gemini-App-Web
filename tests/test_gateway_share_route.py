@@ -166,13 +166,17 @@ def _asgi(method, path, query=b""):
 
 #: Tools the gateway advertises that the node itself does not have, because the
 #: gateway owns their policy and translates them before the node sees a call:
-#: system_change is only ever forwarded as bash_exec or run_job.
-GATEWAY_ONLY_TOOLS = {"system_change"}
+#: system_change is forwarded as bash_exec/run_job, system_write as write_file.
+GATEWAY_ONLY_TOOLS = {"system_change", "system_write"}
 
-#: Tools where the gateway deliberately advertises read-only while the node's own
-#: list keeps the honest hint: the client reads the gateway's surface, and the
-#: gateway refuses the install/delete commands that would make the claim false.
-GATEWAY_UNCONFIRMED_SHELL_TOOLS = {"bash_exec", "run_job"}
+#: Tools the gateway deliberately advertises as read-only while the node's own list
+#: keeps the honest hint. The client reads the gateway's surface, and what keeps the
+#: promise is not the hint but the classifier: the gated classes are refused and
+#: routed to system_change / system_write, which the client does confirm.
+GATEWAY_UNCONFIRMED_TOOLS = {
+    "bash_exec", "run_job", "write_file", "edit_file", "job_kill",
+    "share_file", "serve_dir",
+}
 
 
 def test_advertised_tools_match_the_node_exactly(tmp_path, monkeypatch):
@@ -196,9 +200,9 @@ def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
     An advertised tool with no annotations is treated as destructive, which is
     why Gemini Spark asked before *every* call. The gateway carries its own copy
     of the policy (it may not import node code), so the two sides are compared
-    hint for hint instead of trusting the duplication - the three tools the
-    gateway owns (its unconfirmed shell pair and system_change) are the documented,
-    intentional exceptions.
+    hint for hint instead of trusting the duplication - the tools the gateway owns
+    (its unconfirmed set plus the system_change / system_write twins) are the
+    documented, intentional exceptions.
     """
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(
@@ -213,23 +217,26 @@ def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
 
     for name, hints in node.items():
         assert hints is not None, "the node advertises %s without confirmation hints" % name
-        if name in GATEWAY_UNCONFIRMED_SHELL_TOOLS:
+        if name in GATEWAY_UNCONFIRMED_TOOLS:
             continue
         assert advertised[name] == hints, (
             "confirmation hints for %s differ: gateway=%r node=%r"
             % (name, advertised[name], hints))
 
     # The gateway's own exceptions still have to be exactly what the policy says.
-    for name in GATEWAY_UNCONFIRMED_SHELL_TOOLS:
+    for name in GATEWAY_UNCONFIRMED_TOOLS:
         assert advertised[name]["readOnlyHint"] is True, name
         assert advertised[name]["destructiveHint"] is False, name
-    assert node["bash_exec"]["readOnlyHint"] is False, (
-        "the node's own surface must stay honest: it does not refuse docker/apt "
-        "style commands the way the gateway does")
-    assert advertised["system_change"] == {
+    for name in ("bash_exec", "write_file", "edit_file"):
+        assert node[name]["readOnlyHint"] is False, (
+            "the node's own surface must stay honest: it has no classifier that would "
+            "keep a read-only claim true for %s" % name)
+    destructive = {
         "readOnlyHint": False, "destructiveHint": True,
         "idempotentHint": False, "openWorldHint": False,
     }
+    assert advertised["system_change"] == destructive
+    assert advertised["system_write"] == destructive
 
 
 def test_the_four_share_tools_are_advertised(tmp_path, monkeypatch):

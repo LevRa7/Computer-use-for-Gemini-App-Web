@@ -1054,7 +1054,11 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "write_file",
                     "description": (
-                        "Write a file atomically (creates parent dirs)."
+                        "Write a file atomically (creates parent dirs). Runs without a "
+                        "confirmation dialog, so a path inside the system - /etc, /usr, "
+                        "/boot, /var/lib, C:\\Windows, C:\\Program Files, ProgramData, the "
+                        "registry - is refused and has to go through system_write, which "
+                        "the user is asked to confirm."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -1070,7 +1074,10 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "edit_file",
                     "description": (
-                        "Replace an exact string in a file; old_string must be unique."
+                        "Replace an exact string in a file; old_string must be unique. Runs "
+                        "without a confirmation dialog, so a system path is refused here - "
+                        "read the file and write the whole new content with system_write "
+                        "instead, which the user confirms."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -1082,6 +1089,27 @@ async def messages_endpoint(request: Request):
                             "replace_all": {"type": "boolean", "description": "Replace every occurrence"}
                         },
                         "required": ["path", "old_string", "new_string"]
+                    }
+                },
+                {
+                    "name": "system_write",
+                    "description": (
+                        "Write a file inside a system path - /etc, /usr, /boot, /var/lib, "
+                        "C:\\Windows, C:\\Program Files, ProgramData, the registry - the only "
+                        "way to write there, and the one the user is asked to confirm before "
+                        "it runs. Takes the exact content, like write_file (no shell "
+                        "quoting). To change an existing system file, read_file it first and "
+                        "send the full new content here."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "System path to write"},
+                            "content": {"type": "string", "description": "Exact file content to write"},
+                            "create_dirs": {"type": "boolean", "description": "Create parent directories"},
+                            "mode": {"type": "string", "description": "File mode, e.g. 0644 (POSIX only)"}
+                        },
+                        "required": ["path", "content"]
                     }
                 },
                 {
@@ -1261,7 +1289,30 @@ async def messages_endpoint(request: Request):
                 res = await call_remote_tool(user, name, args)
                 content_text, is_error = format_command_result(res, name)
         elif name in ("write_file", "edit_file"):
-            res = await call_remote_tool(user, name, args)
+            if is_system_path(args.get("path")):
+                # The unconfirmed file tools never touch the system: that is what
+                # system_write exists for, and the client confirms it.
+                is_error = True
+                content_text = path_confirmation_message(args.get("path", ""), name)
+                res = None
+            else:
+                res = await call_remote_tool(user, name, args)
+            if res is not None:
+                err = remote_tool_error(res)
+                if err:
+                    is_error = True
+                    content_text = f"[Error] {err}"
+                else:
+                    path = res.get("path", args.get("path", ""))
+                    sha = res.get("sha256", "")
+                    if name == "write_file":
+                        content_text = f"OK: wrote {res.get('bytes', 0)} bytes to {path} (sha256={sha})"
+                    else:
+                        content_text = f"OK: edited {path} ({res.get('replacements', 0)} replacement(s), sha256={sha})"
+        elif name == "system_write":
+            # Confirmed twin of write_file for paths inside the system. The node only
+            # ever sees write_file, so this works with every deployed node version.
+            res = await call_remote_tool(user, "write_file", args)
             err = remote_tool_error(res)
             if err:
                 is_error = True
@@ -1269,10 +1320,10 @@ async def messages_endpoint(request: Request):
             else:
                 path = res.get("path", args.get("path", ""))
                 sha = res.get("sha256", "")
-                if name == "write_file":
-                    content_text = f"OK: wrote {res.get('bytes', 0)} bytes to {path} (sha256={sha})"
-                else:
-                    content_text = f"OK: edited {path} ({res.get('replacements', 0)} replacement(s), sha256={sha})"
+                content_text = (
+                    f"OK: wrote {res.get('bytes', 0)} bytes to {path} (sha256={sha}) "
+                    f"(confirmed system write)"
+                )
         elif name == "grep_search":
             res = await call_remote_tool(user, name, args)
             err = remote_tool_error(res)
@@ -1779,17 +1830,22 @@ def _relay_headers(raw) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Confirmation policy for shell commands: install / delete go to system_change
+# Confirmation policy: what goes through a tool the client confirms
 # ---------------------------------------------------------------------------
-# bash_exec and run_job are advertised with readOnlyHint=true (see the policy
-# below), and Gemini Spark - like any client that keys its approval dialog on that
-# hint - runs them without asking. That promise is kept for the two classes the
-# operator wants gated: a command that installs or removes software, or that
-# deletes data, is refused, and the model is told to route it through
-# system_change, which is advertised destructiveHint=true and therefore IS
-# confirmed by the client before the call reaches the node.
+# bash_exec, run_job, write_file and edit_file are advertised with
+# readOnlyHint=true (see the policy below), and Gemini Spark - like any client
+# that keys its approval dialog on that hint - runs them without asking. That
+# promise is kept for the classes the operator wants gated, each with a confirmed
+# twin the model is told to use instead:
 #
-# The check is deliberately conservative: a verb has to sit at the start of a
+#   install / delete   software is installed or removed, data is deleted
+#                      -> system_change
+#   sudo               the command escalates privileges (sudo/doas/pkexec/runas)
+#                      -> system_change
+#   system             a system path or the registry is modified
+#                      -> system_change (shell) or system_write (file content)
+#
+# The shell check is deliberately conservative: a verb has to sit at the start of a
 # command segment, after stripping sudo/env/timeout/`powershell -Command`
 # prefixes, so `echo "rm -rf /"`, `grep rm notes.txt` and `git log --grep install`
 # all still run. It is a UX gate, not a sandbox - MESH_READ_ONLY on the node is the
@@ -1856,6 +1912,54 @@ _DELETE_RE = re.compile("|".join(DELETE_COMMAND_PATTERNS), re.IGNORECASE)
 _PIPE_TO_SHELL_RE = re.compile(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b", re.IGNORECASE
 )
+# Privilege escalation: the operator asked to be asked whenever the agent reaches
+# for root, whatever the command does with it.
+_PRIVILEGE_RE = re.compile(
+    r"(?:^|[;&|\n])\s*(?:sudo|doas|gsudo|pkexec|runas)\b"
+    r"|\bsu\s+-\S"
+    r"|\bStart-Process\b[^\n]*?-Verb\s+RunAs",
+    re.IGNORECASE,
+)
+# Paths that belong to the system, not to the user's work: the operator asked to be
+# asked before these are modified. Reads (`cat /etc/os-release`, `ls /usr/bin`) are
+# not gated - only a mutation of them is.
+SYSTEM_PATH_RE = re.compile(
+    r"(?:"
+    r"/(?:etc|usr|bin|sbin|lib|lib64|boot|dev|proc|sys|opt|root)(?:/|\b)"
+    r"|/var/(?:lib|log|spool|cache|www)(?:/|\b)"
+    r"|[A-Za-z]:\\+(?:Windows|ProgramData)(?:\\|\b)"
+    r"|[A-Za-z]:\\+Program Files(?:\s*\(x86\))?(?:\\|\b)"
+    r"|%(?:SystemRoot|ProgramFiles|ProgramData|windir)%"
+    r"|HKEY_LOCAL_MACHINE|HKLM\\+"
+    r")",
+    re.IGNORECASE,
+)
+# What "modifies" means for the test above.
+SYSTEM_MUTATION_PATTERNS = (
+    r"rm|rmdir|unlink|shred|mv|cp|install|chmod|chown|chgrp|mkdir|rmdir|touch|ln|"
+    r"truncate|dd|mount|umount|tee|sed\s+-i|patch|dpkg|rpm|apt(?:-get)?|"
+    r"(?:systemctl|service)\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|"
+    r"daemon-reload|set-property)|"
+    r"crontab|visudo|passwd|user(?:add|mod|del)|group(?:add|mod|del)|"
+    r"reg\s+(?:add|delete|import|copy|restore|save|load|unload)|"
+    r"sc\s+(?:config|create|delete|start|stop)|netsh|schtasks|icacls|takeown|attrib|"
+    r"new-item|set-content|add-content|out-file|remove-item|move-item|copy-item|"
+    r"rename-item|new-itemproperty|set-itemproperty|clear-content|set-acl|"
+    r"(?:start|stop|restart|new|set|remove)-service"
+)
+_SYSTEM_MUTATION_RE = re.compile(
+    r"(?<![\w.-])(?:%s)(?![\w.-])" % SYSTEM_MUTATION_PATTERNS, re.IGNORECASE
+)
+# A redirection that writes straight into a system path.
+_REDIRECT_TO_SYSTEM_RE = re.compile(
+    r">>?\s*[\"']?(?:"
+    r"/(?:etc|usr|bin|sbin|lib|lib64|boot|dev|proc|sys|opt|root)(?:/|\b)"
+    r"|/var/(?:lib|log|spool|cache|www)(?:/|\b)"
+    r"|[A-Za-z]:\\+(?:Windows|ProgramData)(?:\\|\b)"
+    r"|[A-Za-z]:\\+Program Files(?:\s*\(x86\))?(?:\\|\b)"
+    r")",
+    re.IGNORECASE,
+)
 _TRUE_VALUES = ("1", "true", "yes", "on")
 
 
@@ -1870,10 +1974,11 @@ def _wants_background(args) -> bool:
 
 
 def classify_command(command) -> str:
-    """Return "install", "delete" or "" for a shell command.
+    """Return "install", "delete", "sudo", "system" or "" for a shell command.
 
     "" means the command may run in the unconfirmed tools; anything else has to go
-    through system_change, where the client asks the user first.
+    through system_change, where the client asks the user first. The most specific
+    reason wins, so `sudo apt install x` reports the install, not the sudo.
     """
     if not isinstance(command, str) or not command.strip():
         return ""
@@ -1887,22 +1992,51 @@ def classify_command(command) -> str:
             return "install"
         if _DELETE_RE.match(stripped):
             return "delete"
+    if _PRIVILEGE_RE.search(command):
+        return "sudo"
+    if SYSTEM_PATH_RE.search(command) and (
+            _SYSTEM_MUTATION_RE.search(command) or _REDIRECT_TO_SYSTEM_RE.search(command)):
+        return "system"
     return ""
+
+
+def is_system_path(path) -> bool:
+    """True when *path* points into the system rather than the user's own files."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    return bool(SYSTEM_PATH_RE.search(path.strip()))
 
 
 def command_confirmation_message(command: str, kind: str, tool: str) -> str:
     """The refusal a model gets instead of running a gated command unconfirmed."""
-    what = ("installs or removes software" if kind == "install"
-            else "deletes data")
+    what = {
+        "install": "installs or removes software",
+        "delete": "deletes data",
+        "sudo": "runs with elevated privileges",
+        "system": "changes a system path",
+    }.get(kind, "is a system change")
     return (
         f"[Confirmation required] This command {what}, so it was not run.\n"
         f"{tool} is advertised as read-only and therefore runs without a confirmation "
-        f"dialog; the operator's rule is to be asked before anything is installed or "
-        f"deleted. Call system_change with the same command - that tool is advertised "
-        f"as destructive, so the user is asked to confirm it first.\n"
+        f"dialog; the operator's rule is to be asked before anything is installed, "
+        f"deleted, run as root, or written into a system path. Call system_change with "
+        f"the same command - that tool is advertised as destructive, so the user is "
+        f"asked to confirm it first.\n"
         f"command: {command.strip() if isinstance(command, str) else command}\n"
         f"Do not rephrase, split, encode or otherwise obfuscate the command to get around "
         f"this; route it through system_change."
+    )
+
+
+def path_confirmation_message(path: str, tool: str) -> str:
+    """The refusal for write_file/edit_file aimed at a system path."""
+    return (
+        f"[Confirmation required] {path} is a system path, so it was not written.\n"
+        f"{tool} is advertised as read-only and runs without a confirmation dialog; the "
+        f"operator's rule is to be asked before anything outside their own files is "
+        f"changed. Use system_write(path=..., content=...) instead - it is advertised as "
+        f"destructive, so the user is asked to confirm the write first.\n"
+        f"path: {path}"
     )
 
 
@@ -1968,20 +2102,30 @@ def format_job_started(res, args) -> str:
 # must stop and ask the user "confirm this action?" before a call. The spec's
 # defaults are pessimistic (readOnlyHint false, destructiveHint true), so a tool
 # advertised with no annotations is treated as destructive and *every* call was
-# confirmed. Declaring the hints explicitly keeps the prompt for the calls that
-# really install something (mesh_update) or delete/revoke it (unshare), and
-# removes it from read-only and ordinary local work.
+# confirmed. Declaring the hints explicitly keeps the prompt for the calls the
+# operator wants confirmed - installing/deleting, sudo, system paths - and removes
+# it from everything else.
 #
 # This table is the gateway's own: the gateway deploys as one file and may not
 # import node code, so tests/test_gateway_share_route.py compares the advertised
-# hints with the node's TOOLS. Two differences are deliberate and pinned there:
-# system_change exists only here (it is translated to bash_exec/run_job before the
-# node sees it), and bash_exec/run_job are read-only *here* because this is the
-# surface the client reads and the classification above enforces the rule.
+# hints with the node's TOOLS. The differences are deliberate and pinned there:
+# system_change and system_write exist only here (they are translated to
+# bash_exec/run_job/write_file before the node sees them), and every tool this
+# gateway silences is still advertised honestly by the node, whose own surface has
+# no classifier to keep the read-only claim true.
 _ANNOT_READ_ONLY = {
     "readOnlyHint": True,
     "destructiveHint": False,
     "idempotentHint": True,
+    "openWorldHint": False,
+}
+#: Tools that change something but are deliberately left without a dialog: file
+#: writes the operator asked not to confirm, and the unconfirmed shell pair whose
+#: gated classes are refused by classify_command() above.
+_ANNOT_UNCONFIRMED_WRITE = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": False,
     "openWorldHint": False,
 }
 _ANNOT_LOCAL_WRITE = {
@@ -1993,7 +2137,7 @@ _ANNOT_LOCAL_WRITE = {
 #: Publishing hands out a password-like public link, so the client is told the
 #: tool reaches outside the host (openWorldHint). It is still not destructive.
 _ANNOT_PUBLISH = {
-    "readOnlyHint": False,
+    "readOnlyHint": True,
     "destructiveHint": False,
     "idempotentHint": False,
     "openWorldHint": True,
@@ -2021,22 +2165,24 @@ TOOL_ANNOTATIONS = {
     "job_output": _ANNOT_READ_ONLY,
     "job_list": _ANNOT_READ_ONLY,
     "share_list": _ANNOT_READ_ONLY,
-    # local work: writes and commands, but no install and no delete. bash_exec and
-    # run_job are advertised read-only *by this gateway* so the client stops asking
-    # before every command; the classification above keeps that honest by refusing
-    # the two classes the operator wants gated and routing them to system_change.
-    "bash_exec": _ANNOT_READ_ONLY,
-    "run_job": _ANNOT_READ_ONLY,
+    # Commands run without a dialog; classify_command() refuses the gated classes
+    # (install/delete, sudo, system paths) and routes them to system_change.
+    "bash_exec": _ANNOT_UNCONFIRMED_WRITE,
+    "run_job": _ANNOT_UNCONFIRMED_WRITE,
+    # Files are written without a dialog too; a write into a system path is refused
+    # and routed to system_write, which the user confirms.
+    "write_file": _ANNOT_UNCONFIRMED_WRITE,
+    "edit_file": _ANNOT_UNCONFIRMED_WRITE,
     # Stopping a job is neither an install nor a delete, and bash_exec can
     # terminate the same process anyway, so no prompt is spent on it.
-    "job_kill": _ANNOT_LOCAL_WRITE,
-    "write_file": _ANNOT_LOCAL_WRITE,
-    "edit_file": _ANNOT_LOCAL_WRITE,
-    # publishing something on the internet
+    "job_kill": _ANNOT_UNCONFIRMED_WRITE,
+    # publishing something on the internet: no dialog either, but the client is told
+    # the tool reaches outside the host
     "share_file": _ANNOT_PUBLISH,
     "serve_dir": _ANNOT_PUBLISH,
-    # destructive: install or delete/revoke -> confirm first
+    # destructive: install/delete, sudo, system paths -> confirm first
     "system_change": _ANNOT_DESTRUCTIVE,
+    "system_write": _ANNOT_DESTRUCTIVE,
     "mesh_update": _ANNOT_DESTRUCTIVE,
     "unshare": _ANNOT_DESTRUCTIVE,
 }

@@ -62,7 +62,7 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 ## 🛠️ What Gemini can do on your machine (MCP tools)
 
-**21 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
+**22 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
 
 ### Which calls ask for your confirmation
 
@@ -70,14 +70,20 @@ Gemini Spark decides whether to stop and ask *"confirm this action?"* from the *
 
 | Class | Tools | Confirmation |
 | :--- | :--- | :--- |
-| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `bash_exec`, `run_job` | never asked |
-| Local work (writes files, edits them, stops jobs) | `write_file`, `edit_file`, `job_kill` | not asked |
-| Publishing to the internet (`openWorldHint`) | `share_file`, `serve_dir` | not asked |
-| **Destructive — installs something or deletes it** | `system_change` (installs/removes software, deletes data), `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
+| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | never asked |
+| Local work — commands, builds, file writes, jobs, shares | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir` | not asked |
+| **Confirmed — install/delete, `sudo`, system paths** | `system_change` (installs/removes software, deletes data, runs `sudo`, edits system paths by shell), `system_write` (writes file content into a system path), `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
 
-`bash_exec`/`run_job` are generic, so the gateway does not rely on the hint alone: it classifies the command and **refuses** anything that installs, removes or deletes, telling the model to re-issue it as `system_change`. The gate is moved, not removed — ordinary inspection, builds, tests, `git status`, `npm run build` and the like still run without a dialog.
+Four classes are gated, and the gateway — not the hint — enforces them, because a hint is static per tool and cannot tell `ls` from `apt install`:
 
-The tool surface and the confirmation policy live in [gateway.py](gateway.py) (annotations, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`) and in [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` for the node's own surface); tests compare the two surfaces and pin the classifier, so a gated command cannot slip through.
+1. **Installing or removing software** — package managers, uninstallers, `msiexec`, `dpkg`/`rpm`, `curl … | bash`, `iwr … | iex`.
+2. **Deleting data** — `rm`, `Remove-Item`, `del`, `rd`, `shred`, `dd`, `mkfs`, `git clean -fd`, `docker rm`/`prune`, `truncate -s 0`.
+3. **Running as root** — `sudo`, `doas`, `pkexec`, `runas`, `Start-Process -Verb RunAs`.
+4. **System paths** — `/etc`, `/usr`, `/boot`, `/var/lib`, `/opt`, `/dev`, `C:\Windows`, `C:\Program Files`, `ProgramData`, the registry. Reads of those paths (`cat /etc/os-release`, `systemctl status`) are *not* gated, and neither is ordinary work in your own directories.
+
+`bash_exec`/`run_job` refuse such commands and tell the model to re-issue them as `system_change`; `write_file`/`edit_file` refuse a system path and point at `system_write` (which takes the exact content, so there is no shell quoting to get wrong). The gate is moved, not removed — inspection, builds, tests, config edits in your projects and the like still run without a dialog.
+
+The tool surface and the confirmation policy live in [gateway.py](gateway.py) (annotations, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) and in [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` for the node's own surface); tests compare the two surfaces and pin the classifier, so a gated command cannot slip through.
 
 > [!NOTE]
 > The classifier matches a verb at the start of a command segment (after `sudo`/`env`/`timeout`/`powershell -Command` prefixes), so `echo "rm -rf /"` or `grep rm notes.txt` still run, while `curl … | bash` counts as an install. It is a UX gate, not a sandbox: for hard guarantees independent of any prompt use the node's own switches — `MESH_READ_ONLY=1` and `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
@@ -94,8 +100,8 @@ The tool surface and the confirmation policy live in [gateway.py](gateway.py) (a
 
 | Tool | What it does |
 | :--- | :--- |
-| `bash_exec(command, timeout_sec, max_chars, cursor)` | Runs a shell command. The shell matches the **host**, not the tool's name — `bash` on Linux/macOS, PowerShell or `cmd.exe` on Windows; check `command_shell` from `system_info()` first. Output is paginated: when it is cut, call again with `cursor=next_cursor`, nothing is dropped; output above 2 MB is spooled to a file returned in `saved_to`. `timeout_sec` is 1–120 (default 25). Install/remove/delete commands are **refused here** and have to go through `system_change`. |
-| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Installs, removes or deletes on the host — the confirmed twin of `bash_exec`, and the only tool allowed to run `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item` or disk tools. It is advertised as destructive, so Gemini asks you first. `background=true` runs it as a job (for long installs) and returns a `job_id` for `job_output`; `cwd` applies to that mode. |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Runs a shell command. The shell matches the **host**, not the tool's name — `bash` on Linux/macOS, PowerShell or `cmd.exe` on Windows; check `command_shell` from `system_info()` first. Output is paginated: when it is cut, call again with `cursor=next_cursor`, nothing is dropped; output above 2 MB is spooled to a file returned in `saved_to`. `timeout_sec` is 1–120 (default 25). Installs/removals, `sudo` and system paths are **refused here** and have to go through `system_change`. |
+| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Installs, removes or deletes on the host, runs privileged commands and edits system paths — the confirmed twin of `bash_exec`, and the only tool allowed to run `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item`/`sudo` or disk tools. It is advertised as destructive, so Gemini asks you first. `background=true` runs it as a job (for long installs) and returns a `job_id` for `job_output`; `cwd` applies to that mode. |
 
 ### Files
 
@@ -103,8 +109,9 @@ The tool surface and the confirmation policy live in [gateway.py](gateway.py) (a
 | :--- | :--- |
 | `list_dir(path)` | Lists files and directories (workspace by default). |
 | `read_file(path, start_line, end_line, max_chars, cursor)` | Reads a text file with line numbers, optionally restricted to a line range. Paginated like `bash_exec`. |
-| `write_file(path, content, create_dirs, mode)` | Atomically creates or overwrites a file (temp file + `os.replace`). `mode` is POSIX-only: on Windows it is not honoured, and the result says so instead of pretending. |
-| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Replaces an exact substring. `old_string` must match exactly once unless `replace_all` is set; `expected_sha256` guards against overwriting a file that changed since it was read. |
+| `write_file(path, content, create_dirs, mode)` | Atomically creates or overwrites a file (temp file + `os.replace`). `mode` is POSIX-only: on Windows it is not honoured, and the result says so instead of pretending. A path inside the system is **refused** and has to go through `system_write`. |
+| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Replaces an exact substring. `old_string` must match exactly once unless `replace_all` is set; `expected_sha256` guards against overwriting a file that changed since it was read. System paths are refused — read the file and send the whole new content to `system_write`. |
+| `system_write(path, content, create_dirs, mode)` | Writes a file inside a system path (`/etc`, `/usr`, `/boot`, `/var/lib`, `C:\Windows`, `C:\Program Files`, `ProgramData`, the registry) — the confirmed twin of `write_file` and the only way to write there. Gemini asks you first. Content is exact, so there is no shell quoting to get wrong. |
 
 ### Search
 
@@ -468,7 +475,7 @@ Gemini в браузере или на телефоне умеет разгов�
 
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
-**21 инструмент.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+**22 инструмента.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
 
 ### На какие вызовы Gemini спросит подтверждение
 
@@ -476,14 +483,20 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Класс | Инструменты | Подтверждение |
 | :--- | :--- | :--- |
-| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `bash_exec`, `run_job` | не запрашивается |
-| Локальная работа (пишет и правит файлы, останавливает задачи) | `write_file`, `edit_file`, `job_kill` | не запрашивается |
-| Публикация в интернет (`openWorldHint`) | `share_file`, `serve_dir` | не запрашивается |
-| **Деструктивные — установка или удаление** | `system_change` (установка/удаление ПО, удаление данных), `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
+| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | не запрашивается |
+| Локальная работа — команды, сборки, запись файлов, задачи, публикации | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir` | не запрашивается |
+| **Подтверждаемые — установка/удаление, `sudo`, системные пути** | `system_change` (установка/удаление ПО, удаление данных, `sudo`, правка системных путей через оболочку), `system_write` (запись файла в системный путь), `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
 
-`bash_exec` и `run_job` универсальны, поэтому шлюз не полагается на одну подсказку: он разбирает команду и **отказывается** выполнять установку, удаление ПО или удаление данных, предлагая модели переоформить вызов как `system_change`. Барьер не убран, а перенесён: осмотр, сборки, тесты, `git status`, `npm run build` и прочее по-прежнему идут без диалога.
+Под барьером четыре класса, и следит за ними шлюз, а не подсказка: подсказка статична на инструмент и не отличает `ls` от `apt install`.
 
-Поверхность инструментов и политика подтверждений живут в [gateway.py](gateway.py) (аннотации, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`) и в [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` для собственной поверхности узла); тесты сравнивают обе поверхности и фиксируют классификатор, чтобы закрытая команда не просочилась.
+1. **Установка и удаление ПО** — пакетные менеджеры, деинсталляторы, `msiexec`, `dpkg`/`rpm`, `curl … | bash`, `iwr … | iex`.
+2. **Удаление данных** — `rm`, `Remove-Item`, `del`, `rd`, `shred`, `dd`, `mkfs`, `git clean -fd`, `docker rm`/`prune`, `truncate -s 0`.
+3. **Работа от root** — `sudo`, `doas`, `pkexec`, `runas`, `Start-Process -Verb RunAs`.
+4. **Системные разделы** — `/etc`, `/usr`, `/boot`, `/var/lib`, `/opt`, `/dev`, `C:\Windows`, `C:\Program Files`, `ProgramData`, реестр. **Чтение** этих путей (`cat /etc/os-release`, `systemctl status`) не блокируется, как и обычная работа в ваших каталогах.
+
+`bash_exec`/`run_job` отклоняют такие команды и предлагают переоформить их как `system_change`; `write_file`/`edit_file` отклоняют системный путь и направляют в `system_write` (он принимает точное содержимое, поэтому экранировать ничего не нужно). Барьер не убран, а перенесён: осмотр, сборки, тесты, правка конфигов в ваших проектах идут без диалога.
+
+Поверхность инструментов и политика подтверждений живут в [gateway.py](gateway.py) (аннотации, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) и в [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` для собственной поверхности узла); тесты сравнивают обе поверхности и фиксируют классификатор, чтобы закрытая команда не просочилась.
 
 > [!NOTE]
 > Классификатор ищет глагол в начале сегмента команды (после префиксов `sudo`/`env`/`timeout`/`powershell -Command`), поэтому `echo "rm -rf /"` или `grep rm notes.txt` выполняются как раньше, а `curl … | bash` считается установкой. Это UX-барьер, а не песочница: жёсткая гарантия — переключатели узла `MESH_READ_ONLY` и `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
@@ -500,8 +513,8 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Инструмент | Что делает |
 | :--- | :--- |
-| `bash_exec(command, timeout_sec, max_chars, cursor)` | Выполняет команду оболочки. Оболочка соответствует **хосту**, а не названию инструмента — `bash` на Linux/macOS, PowerShell или `cmd.exe` на Windows; сначала посмотрите `command_shell` из `system_info()`. Вывод постраничный: если обрезан, вызовите снова с `cursor=next_cursor`, ничего не теряется; вывод больше 2 МБ сохраняется в файл, путь в `saved_to`. `timeout_sec` — 1–120 (по умолчанию 25). Команды установки и удаления здесь **отклоняются** — их надо выполнять через `system_change`. |
-| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Установка, удаление ПО и удаление данных на хосте — «подтверждаемый» двойник `bash_exec` и единственный инструмент, которому разрешены `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item` и работа с дисками. Объявлен деструктивным, поэтому Gemini спрашивает подтверждение. `background=true` запускает его как фоновую задачу (для долгих установок) и возвращает `job_id` для `job_output`; `cwd` действует только в этом режиме. |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Выполняет команду оболочки. Оболочка соответствует **хосту**, а не названию инструмента — `bash` на Linux/macOS, PowerShell или `cmd.exe` на Windows; сначала посмотрите `command_shell` из `system_info()`. Вывод постраничный: если обрезан, вызовите снова с `cursor=next_cursor`, ничего не теряется; вывод больше 2 МБ сохраняется в файл, путь в `saved_to`. `timeout_sec` — 1–120 (по умолчанию 25). Установка/удаление, `sudo` и системные пути здесь **отклоняются** — их надо выполнять через `system_change`. |
+| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Установка, удаление ПО и данных, привилегированные команды и правка системных путей — «подтверждаемый» двойник `bash_exec` и единственный инструмент, которому разрешены `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item`/`sudo` и работа с дисками. Объявлен деструктивным, поэтому Gemini спрашивает подтверждение. `background=true` запускает его как фоновую задачу (для долгих установок) и возвращает `job_id` для `job_output`; `cwd` действует только в этом режиме. |
 
 ### Файлы
 
@@ -509,8 +522,9 @@ Gemini Spark решает, останавливаться ли с вопросо
 | :--- | :--- |
 | `list_dir(path)` | Список файлов и каталогов (по умолчанию — рабочий каталог). |
 | `read_file(path, start_line, end_line, max_chars, cursor)` | Читает текстовый файл с номерами строк, при желании — диапазон строк. Постранично, как `bash_exec`. |
-| `write_file(path, content, create_dirs, mode)` | Атомарно создаёт или перезаписывает файл (временный файл + `os.replace`). `mode` — только для POSIX: на Windows он не применяется, и результат об этом честно сообщает. |
-| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Заменяет точную подстроку. `old_string` должен встречаться ровно один раз, если не задан `replace_all`; `expected_sha256` защищает от перезаписи файла, изменившегося после чтения. |
+| `write_file(path, content, create_dirs, mode)` | Атомарно создаёт или перезаписывает файл (временный файл + `os.replace`). `mode` — только для POSIX: на Windows он не применяется, и результат об этом честно сообщает. Путь внутри системы **отклоняется** — для него есть `system_write`. |
+| `edit_file(path, old_string, new_string, expected_sha256, replace_all)` | Заменяет точную подстроку. `old_string` должен встречаться ровно один раз, если не задан `replace_all`; `expected_sha256` защищает от перезаписи файла, изменившегося после чтения. Системные пути отклоняются — прочитайте файл и отправьте новое содержимое целиком в `system_write`. |
+| `system_write(path, content, create_dirs, mode)` | Запись файла в системный путь (`/etc`, `/usr`, `/boot`, `/var/lib`, `C:\Windows`, `C:\Program Files`, `ProgramData`, реестр) — «подтверждаемый» двойник `write_file` и единственный способ туда писать. Gemini спрашивает подтверждение. Содержимое передаётся точно, экранировать для оболочки ничего не нужно. |
 
 ### Поиск
 
