@@ -918,8 +918,10 @@ async def messages_endpoint(request: Request):
     elif method == "ping":
         resp["result"] = {}
     elif method == "tools/list":
+        # annotate_tools attaches the confirmation policy (read-only / local
+        # write / publish / destructive) declared at the bottom of this file.
         resp["result"] = {
-            "tools": [
+            "tools": annotate_tools([
                 {
                     "name": "list_dir",
                     "description": (
@@ -1130,7 +1132,7 @@ async def messages_endpoint(request: Request):
                         "limit": {"type": "integer", "description": "How many jobs to return (1-50, default 20)"}
                     }, "required": []}
                 }
-            ] + SHARE_TOOL_SPECS
+            ] + SHARE_TOOL_SPECS)
         }
     elif method == "tools/call":
         name = params.get("name")
@@ -1733,6 +1735,95 @@ def _relay_headers(raw) -> dict:
             continue  # a redirect must stay inside this domain's share namespace
         headers[name] = text
     return headers
+
+
+# ---------------------------------------------------------------------------
+# MCP tool annotations: when the client may run a tool without asking first
+# ---------------------------------------------------------------------------
+# Gemini Spark reads ``Tool.annotations`` from ``tools/list`` to decide whether it
+# must stop and ask the user "confirm this action?" before a call. The spec's
+# defaults are pessimistic (readOnlyHint false, destructiveHint true), so a tool
+# advertised with no annotations is treated as destructive and *every* call was
+# confirmed. Declaring the hints explicitly keeps the prompt for the calls that
+# really install something (mesh_update) or delete/revoke it (unshare), and
+# removes it from read-only and ordinary local work.
+#
+# This table is a deliberate copy of ``core/mcp_tools.TOOL_ANNOTATIONS``: the
+# gateway deploys as one file and may not import node code, so
+# tests/test_gateway_share_route.py compares the advertised annotations with the
+# node's TOOLS and fails the build on drift.
+_ANNOT_READ_ONLY = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+_ANNOT_LOCAL_WRITE = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+#: Publishing hands out a password-like public link, so the client is told the
+#: tool reaches outside the host (openWorldHint). It is still not destructive.
+_ANNOT_PUBLISH = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": True,
+}
+_ANNOT_DESTRUCTIVE = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+#: Confirmation policy per advertised tool; names must match core/mcp_tools.TOOLS.
+#: A tool left out stays unannotated on purpose and therefore asks for
+#: confirmation - the safe default for something nobody has judged yet.
+TOOL_ANNOTATIONS = {
+    # read-only: looking around never needs a prompt
+    "mesh_status": _ANNOT_READ_ONLY,
+    "system_info": _ANNOT_READ_ONLY,
+    "system_vitals": _ANNOT_READ_ONLY,
+    "get_orchestration_skill": _ANNOT_READ_ONLY,
+    "list_dir": _ANNOT_READ_ONLY,
+    "read_file": _ANNOT_READ_ONLY,
+    "grep_search": _ANNOT_READ_ONLY,
+    "glob_find": _ANNOT_READ_ONLY,
+    "job_output": _ANNOT_READ_ONLY,
+    "job_list": _ANNOT_READ_ONLY,
+    "share_list": _ANNOT_READ_ONLY,
+    # local work: writes and commands, but no install and no delete
+    "bash_exec": _ANNOT_LOCAL_WRITE,
+    "run_job": _ANNOT_LOCAL_WRITE,
+    # Stopping a job is neither an install nor a delete, and bash_exec can
+    # terminate the same process anyway, so no prompt is spent on it.
+    "job_kill": _ANNOT_LOCAL_WRITE,
+    "write_file": _ANNOT_LOCAL_WRITE,
+    "edit_file": _ANNOT_LOCAL_WRITE,
+    # publishing something on the internet
+    "share_file": _ANNOT_PUBLISH,
+    "serve_dir": _ANNOT_PUBLISH,
+    # destructive: install or delete/revoke -> confirm first
+    "mesh_update": _ANNOT_DESTRUCTIVE,
+    "unshare": _ANNOT_DESTRUCTIVE,
+}
+
+
+def annotate_tools(tools):
+    """Return *tools* with the confirmation policy attached to each entry."""
+    annotated = []
+    for tool in tools:
+        profile = TOOL_ANNOTATIONS.get(tool.get("name"))
+        if profile is None:
+            annotated.append(tool)
+            continue
+        tool = dict(tool)
+        tool["annotations"] = dict(profile)
+        annotated.append(tool)
+    return annotated
 
 
 # Tool surface advertised for public shares. The gateway keeps its own static

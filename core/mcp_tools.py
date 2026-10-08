@@ -2107,6 +2107,93 @@ def _schema(properties: Dict[str, Any], required: Optional[List[str]] = None) ->
     return schema
 
 
+# ---------------------------------------------------------------------------
+# MCP tool annotations - when the client is allowed to run without asking
+# ---------------------------------------------------------------------------
+# A client such as Gemini Spark reads ``Tool.annotations`` from ``tools/list`` to
+# decide whether it must stop and ask the user "confirm this action?" before a
+# call. The spec's defaults are the pessimistic ones (``readOnlyHint`` false,
+# ``destructiveHint`` true), so a tool advertised with *no* annotations is treated
+# as if it deleted something - which is exactly why the user was asked to confirm
+# every single call, while other MCP servers (whose tools do carry hints) ran
+# without a prompt.
+#
+# Four explicit profiles replace that guesswork:
+#
+#   read-only    the tool only observes the host            -> never ask
+#   local write  it changes something on the host, but nothing is installed or
+#                removed                                    -> do not ask
+#   publish      the result is reachable from the internet   -> no install/delete
+#   destructive  it installs (mesh_update) or deletes/revokes (unshare)
+#                something                                    -> ask first
+#
+# The node's own guards are untouched by this: ``MESH_READ_ONLY`` and
+# ``MESH_WRITE_ROOTS`` still refuse work at the tool implementation level.
+_ANNOTATIONS_READ_ONLY: Dict[str, Any] = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
+_ANNOTATIONS_LOCAL_WRITE: Dict[str, Any] = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+#: Password-like public links are handed out here, so the client is told the tool
+#: reaches outside the host (``openWorldHint``). It is still not destructive.
+_ANNOTATIONS_PUBLISH: Dict[str, Any] = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": True,
+}
+
+_ANNOTATIONS_DESTRUCTIVE: Dict[str, Any] = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+#: The confirmation policy, one entry per advertised tool. Classify every new tool
+#: here: a tool missing from this table stays unannotated on purpose, which means
+#: the client falls back to its default "ask first" - the safe answer for a tool
+#: nobody has judged yet. ``tests/test_tool_annotations.py`` fails on such a tool
+#: so the decision cannot be forgotten.
+TOOL_ANNOTATIONS: Dict[str, Dict[str, Any]] = {
+    # --- read-only: looking around never needs a prompt ----------------------
+    "mesh_status": _ANNOTATIONS_READ_ONLY,
+    "system_info": _ANNOTATIONS_READ_ONLY,
+    "system_vitals": _ANNOTATIONS_READ_ONLY,
+    "get_orchestration_skill": _ANNOTATIONS_READ_ONLY,
+    "list_dir": _ANNOTATIONS_READ_ONLY,
+    "read_file": _ANNOTATIONS_READ_ONLY,
+    "grep_search": _ANNOTATIONS_READ_ONLY,
+    "glob_find": _ANNOTATIONS_READ_ONLY,
+    "job_output": _ANNOTATIONS_READ_ONLY,
+    "job_list": _ANNOTATIONS_READ_ONLY,
+    "share_list": _ANNOTATIONS_READ_ONLY,
+    # --- local work: writes and commands, but no install and no delete -------
+    "bash_exec": _ANNOTATIONS_LOCAL_WRITE,
+    "run_job": _ANNOTATIONS_LOCAL_WRITE,
+    # Stopping a background job is not an install and not a delete, and
+    # bash_exec can terminate the same process anyway; a prompt here would only
+    # add noise, so it carries the same profile as the rest of the local work.
+    "job_kill": _ANNOTATIONS_LOCAL_WRITE,
+    "write_file": _ANNOTATIONS_LOCAL_WRITE,
+    "edit_file": _ANNOTATIONS_LOCAL_WRITE,
+    # --- publishing something on the internet -------------------------------
+    "share_file": _ANNOTATIONS_PUBLISH,
+    "serve_dir": _ANNOTATIONS_PUBLISH,
+    # --- destructive: install or delete/revoke -> confirm first --------------
+    "mesh_update": _ANNOTATIONS_DESTRUCTIVE,
+    "unshare": _ANNOTATIONS_DESTRUCTIVE,
+}
+
 TOOLS: List[Dict[str, Any]] = [
     {
         "name": "mesh_status",
@@ -2375,6 +2462,18 @@ TOOLS: List[Dict[str, Any]] = [
         ),
     },
 ]
+
+
+# Attach the confirmation policy to the advertised specs. Kept out of the literal
+# above so the policy reads as one table instead of twenty scattered flags.
+def _attach_annotations(tools: List[Dict[str, Any]]) -> None:
+    for spec in tools:
+        profile = TOOL_ANNOTATIONS.get(spec.get("name"))
+        if profile is not None:
+            spec["annotations"] = dict(profile)
+
+
+_attach_annotations(TOOLS)
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,22 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 **20 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
 
+### Which calls ask for your confirmation
+
+Gemini Spark decides whether to stop and ask *"confirm this action?"* from the **MCP annotation hints** each tool advertises (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). A tool advertised with no hints at all is treated as destructive by the spec's defaults — that is why a server that declares none gets a confirmation prompt on *every single call*. Here the hints are explicit:
+
+| Class | Tools | Confirmation |
+| :--- | :--- | :--- |
+| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | never asked |
+| Local work (writes files, runs commands, starts and stops jobs) | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill` | not asked |
+| Publishing to the internet (`openWorldHint`) | `share_file`, `serve_dir` | not asked |
+| **Destructive — installs something or deletes it** | `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
+
+The single source of truth is `TOOL_ANNOTATIONS` in [core/mcp_tools.py](core/mcp_tools.py); the gateway carries a copy it may not import ([gateway.py](gateway.py)), and a test compares the two, so the two surfaces cannot drift.
+
+> [!NOTE]
+> `bash_exec` and `run_job` are generic: an `apt install` or an `rm` typed into them cannot be classified in advance, and the hints are static per tool. So confirmation covers the dedicated install/delete tools. For hard guarantees independent of any prompt, use the node's own switches — `MESH_READ_ONLY=1` and `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
+
 ### Status and host information
 
 | Tool | What it does |
@@ -450,6 +466,22 @@ Gemini в браузере или на телефоне умеет разгов�
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
 **20 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+
+### На какие вызовы Gemini спросит подтверждение
+
+Gemini Spark решает, останавливаться ли с вопросом *«подтвердить действие?»*, по **подсказкам MCP-аннотаций** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), которые инструмент объявляет в `tools/list`. Инструмент без аннотаций считается деструктивным по умолчанию спецификации — поэтому сервер, который их не объявляет, получает запрос подтверждения на **каждом** вызове. Здесь подсказки заданы явно:
+
+| Класс | Инструменты | Подтверждение |
+| :--- | :--- | :--- |
+| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | не запрашивается |
+| Локальная работа (пишет файлы, выполняет команды, запускает и останавливает задачи) | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill` | не запрашивается |
+| Публикация в интернет (`openWorldHint`) | `share_file`, `serve_dir` | не запрашивается |
+| **Деструктивные — установка или удаление** | `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
+
+Единственный источник правды — таблица `TOOL_ANNOTATIONS` в [core/mcp_tools.py](core/mcp_tools.py); шлюз держит свою копию (он не может импортировать код узла — [gateway.py](gateway.py)), а тест сравнивает обе стороны, поэтому поверхности не разъедутся.
+
+> [!NOTE]
+> `bash_exec` и `run_job` универсальны: `apt install` или `rm`, набранные в них, невозможно классифицировать заранее — подсказки статичны и заданы на инструмент целиком. Поэтому подтверждение покрывает выделенные инструменты установки и удаления. Если нужна жёсткая гарантия, не зависящая от диалога клиента, используйте переключатели самого узла — `MESH_READ_ONLY=1` и `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
 
 ### Состояние и сведения о хосте
 

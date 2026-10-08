@@ -179,6 +179,31 @@ def test_advertised_tools_match_the_node_exactly(tmp_path, monkeypatch):
         "the node has tools the gateway never advertises: %s" % sorted(node - advertised))
 
 
+def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
+    """The client's "confirm this action?" prompt is driven by these hints.
+
+    An advertised tool with no annotations is treated as destructive, which is
+    why Gemini Spark asked before *every* call. The gateway carries its own copy
+    of the policy (it may not import node code), so the two sides are compared
+    hint for hint instead of trusting the duplication.
+    """
+    _registry(tmp_path, monkeypatch)
+    response = asyncio.run(gateway.messages_endpoint(
+        _post_request(f"/mcp?user={NODE}&token={TOKEN}",
+                      {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    ))
+    advertised = {tool["name"]: tool.get("annotations")
+                  for tool in json.loads(response.body)["result"]["tools"]}
+    node = {spec["name"]: spec.get("annotations") for spec in mcp_tools.TOOLS}
+
+    assert advertised.keys() == node.keys()
+    for name, hints in node.items():
+        assert hints is not None, "the node advertises %s without confirmation hints" % name
+        assert advertised[name] == hints, (
+            "confirmation hints for %s differ: gateway=%r node=%r"
+            % (name, advertised[name], hints))
+
+
 def test_the_four_share_tools_are_advertised(tmp_path, monkeypatch):
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(
