@@ -164,6 +164,17 @@ def _asgi(method, path, query=b""):
 # (a) Tool surface parity: the gateway's static tools/list vs the node's TOOLS
 # ---------------------------------------------------------------------------
 
+#: Tools the gateway advertises that the node itself does not have, because the
+#: gateway owns their policy and translates them before the node sees a call:
+#: system_change is only ever forwarded as bash_exec or run_job.
+GATEWAY_ONLY_TOOLS = {"system_change"}
+
+#: Tools where the gateway deliberately advertises read-only while the node's own
+#: list keeps the honest hint: the client reads the gateway's surface, and the
+#: gateway refuses the install/delete commands that would make the claim false.
+GATEWAY_UNCONFIRMED_SHELL_TOOLS = {"bash_exec", "run_job"}
+
+
 def test_advertised_tools_match_the_node_exactly(tmp_path, monkeypatch):
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(
@@ -173,8 +184,8 @@ def test_advertised_tools_match_the_node_exactly(tmp_path, monkeypatch):
     advertised = {tool["name"] for tool in json.loads(response.body)["result"]["tools"]}
     node = {tool["name"] for tool in mcp_tools.TOOLS}
 
-    assert advertised - node == set(), (
-        "the gateway advertises tools the node does not have: %s" % sorted(advertised - node))
+    assert advertised - node == GATEWAY_ONLY_TOOLS, (
+        "unexpected gateway-only tools: %s" % sorted((advertised - node) - GATEWAY_ONLY_TOOLS))
     assert node - advertised == set(), (
         "the node has tools the gateway never advertises: %s" % sorted(node - advertised))
 
@@ -185,7 +196,9 @@ def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
     An advertised tool with no annotations is treated as destructive, which is
     why Gemini Spark asked before *every* call. The gateway carries its own copy
     of the policy (it may not import node code), so the two sides are compared
-    hint for hint instead of trusting the duplication.
+    hint for hint instead of trusting the duplication - the three tools the
+    gateway owns (its unconfirmed shell pair and system_change) are the documented,
+    intentional exceptions.
     """
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(
@@ -196,12 +209,27 @@ def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
                   for tool in json.loads(response.body)["result"]["tools"]}
     node = {spec["name"]: spec.get("annotations") for spec in mcp_tools.TOOLS}
 
-    assert advertised.keys() == node.keys()
+    assert set(advertised) - set(node) == GATEWAY_ONLY_TOOLS
+
     for name, hints in node.items():
         assert hints is not None, "the node advertises %s without confirmation hints" % name
+        if name in GATEWAY_UNCONFIRMED_SHELL_TOOLS:
+            continue
         assert advertised[name] == hints, (
             "confirmation hints for %s differ: gateway=%r node=%r"
             % (name, advertised[name], hints))
+
+    # The gateway's own exceptions still have to be exactly what the policy says.
+    for name in GATEWAY_UNCONFIRMED_SHELL_TOOLS:
+        assert advertised[name]["readOnlyHint"] is True, name
+        assert advertised[name]["destructiveHint"] is False, name
+    assert node["bash_exec"]["readOnlyHint"] is False, (
+        "the node's own surface must stay honest: it does not refuse docker/apt "
+        "style commands the way the gateway does")
+    assert advertised["system_change"] == {
+        "readOnlyHint": False, "destructiveHint": True,
+        "idempotentHint": False, "openWorldHint": False,
+    }
 
 
 def test_the_four_share_tools_are_advertised(tmp_path, monkeypatch):

@@ -62,7 +62,7 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 ## 🛠️ What Gemini can do on your machine (MCP tools)
 
-**20 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
+**21 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
 
 ### Which calls ask for your confirmation
 
@@ -70,15 +70,17 @@ Gemini Spark decides whether to stop and ask *"confirm this action?"* from the *
 
 | Class | Tools | Confirmation |
 | :--- | :--- | :--- |
-| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | never asked |
-| Local work (writes files, runs commands, starts and stops jobs) | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill` | not asked |
+| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `bash_exec`, `run_job` | never asked |
+| Local work (writes files, edits them, stops jobs) | `write_file`, `edit_file`, `job_kill` | not asked |
 | Publishing to the internet (`openWorldHint`) | `share_file`, `serve_dir` | not asked |
-| **Destructive — installs something or deletes it** | `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
+| **Destructive — installs something or deletes it** | `system_change` (installs/removes software, deletes data), `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
 
-The single source of truth is `TOOL_ANNOTATIONS` in [core/mcp_tools.py](core/mcp_tools.py); the gateway carries a copy it may not import ([gateway.py](gateway.py)), and a test compares the two, so the two surfaces cannot drift.
+`bash_exec`/`run_job` are generic, so the gateway does not rely on the hint alone: it classifies the command and **refuses** anything that installs, removes or deletes, telling the model to re-issue it as `system_change`. The gate is moved, not removed — ordinary inspection, builds, tests, `git status`, `npm run build` and the like still run without a dialog.
+
+The tool surface and the confirmation policy live in [gateway.py](gateway.py) (annotations, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`) and in [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` for the node's own surface); tests compare the two surfaces and pin the classifier, so a gated command cannot slip through.
 
 > [!NOTE]
-> `bash_exec` and `run_job` are generic: an `apt install` or an `rm` typed into them cannot be classified in advance, and the hints are static per tool. So confirmation covers the dedicated install/delete tools. For hard guarantees independent of any prompt, use the node's own switches — `MESH_READ_ONLY=1` and `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
+> The classifier matches a verb at the start of a command segment (after `sudo`/`env`/`timeout`/`powershell -Command` prefixes), so `echo "rm -rf /"` or `grep rm notes.txt` still run, while `curl … | bash` counts as an install. It is a UX gate, not a sandbox: for hard guarantees independent of any prompt use the node's own switches — `MESH_READ_ONLY=1` and `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
 
 ### Status and host information
 
@@ -92,7 +94,8 @@ The single source of truth is `TOOL_ANNOTATIONS` in [core/mcp_tools.py](core/mcp
 
 | Tool | What it does |
 | :--- | :--- |
-| `bash_exec(command, timeout_sec, max_chars, cursor)` | Runs a shell command. The shell matches the **host**, not the tool's name — `bash` on Linux/macOS, PowerShell or `cmd.exe` on Windows; check `command_shell` from `system_info()` first. Output is paginated: when it is cut, call again with `cursor=next_cursor`, nothing is dropped; output above 2 MB is spooled to a file returned in `saved_to`. `timeout_sec` is 1–120 (default 25). |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Runs a shell command. The shell matches the **host**, not the tool's name — `bash` on Linux/macOS, PowerShell or `cmd.exe` on Windows; check `command_shell` from `system_info()` first. Output is paginated: when it is cut, call again with `cursor=next_cursor`, nothing is dropped; output above 2 MB is spooled to a file returned in `saved_to`. `timeout_sec` is 1–120 (default 25). Install/remove/delete commands are **refused here** and have to go through `system_change`. |
+| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Installs, removes or deletes on the host — the confirmed twin of `bash_exec`, and the only tool allowed to run `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item` or disk tools. It is advertised as destructive, so Gemini asks you first. `background=true` runs it as a job (for long installs) and returns a `job_id` for `job_output`; `cwd` applies to that mode. |
 
 ### Files
 
@@ -465,7 +468,7 @@ Gemini в браузере или на телефоне умеет разгов�
 
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
-**20 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+**21 инструмент.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
 
 ### На какие вызовы Gemini спросит подтверждение
 
@@ -473,15 +476,17 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Класс | Инструменты | Подтверждение |
 | :--- | :--- | :--- |
-| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | не запрашивается |
-| Локальная работа (пишет файлы, выполняет команды, запускает и останавливает задачи) | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill` | не запрашивается |
+| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `bash_exec`, `run_job` | не запрашивается |
+| Локальная работа (пишет и правит файлы, останавливает задачи) | `write_file`, `edit_file`, `job_kill` | не запрашивается |
 | Публикация в интернет (`openWorldHint`) | `share_file`, `serve_dir` | не запрашивается |
-| **Деструктивные — установка или удаление** | `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
+| **Деструктивные — установка или удаление** | `system_change` (установка/удаление ПО, удаление данных), `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
 
-Единственный источник правды — таблица `TOOL_ANNOTATIONS` в [core/mcp_tools.py](core/mcp_tools.py); шлюз держит свою копию (он не может импортировать код узла — [gateway.py](gateway.py)), а тест сравнивает обе стороны, поэтому поверхности не разъедутся.
+`bash_exec` и `run_job` универсальны, поэтому шлюз не полагается на одну подсказку: он разбирает команду и **отказывается** выполнять установку, удаление ПО или удаление данных, предлагая модели переоформить вызов как `system_change`. Барьер не убран, а перенесён: осмотр, сборки, тесты, `git status`, `npm run build` и прочее по-прежнему идут без диалога.
+
+Поверхность инструментов и политика подтверждений живут в [gateway.py](gateway.py) (аннотации, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`) и в [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` для собственной поверхности узла); тесты сравнивают обе поверхности и фиксируют классификатор, чтобы закрытая команда не просочилась.
 
 > [!NOTE]
-> `bash_exec` и `run_job` универсальны: `apt install` или `rm`, набранные в них, невозможно классифицировать заранее — подсказки статичны и заданы на инструмент целиком. Поэтому подтверждение покрывает выделенные инструменты установки и удаления. Если нужна жёсткая гарантия, не зависящая от диалога клиента, используйте переключатели самого узла — `MESH_READ_ONLY=1` и `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
+> Классификатор ищет глагол в начале сегмента команды (после префиксов `sudo`/`env`/`timeout`/`powershell -Command`), поэтому `echo "rm -rf /"` или `grep rm notes.txt` выполняются как раньше, а `curl … | bash` считается установкой. Это UX-барьер, а не песочница: жёсткая гарантия — переключатели узла `MESH_READ_ONLY` и `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
 
 ### Состояние и сведения о хосте
 
@@ -495,7 +500,8 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Инструмент | Что делает |
 | :--- | :--- |
-| `bash_exec(command, timeout_sec, max_chars, cursor)` | Выполняет команду оболочки. Оболочка соответствует **хосту**, а не названию инструмента — `bash` на Linux/macOS, PowerShell или `cmd.exe` на Windows; сначала посмотрите `command_shell` из `system_info()`. Вывод постраничный: если обрезан, вызовите снова с `cursor=next_cursor`, ничего не теряется; вывод больше 2 МБ сохраняется в файл, путь в `saved_to`. `timeout_sec` — 1–120 (по умолчанию 25). |
+| `bash_exec(command, timeout_sec, max_chars, cursor)` | Выполняет команду оболочки. Оболочка соответствует **хосту**, а не названию инструмента — `bash` на Linux/macOS, PowerShell или `cmd.exe` на Windows; сначала посмотрите `command_shell` из `system_info()`. Вывод постраничный: если обрезан, вызовите снова с `cursor=next_cursor`, ничего не теряется; вывод больше 2 МБ сохраняется в файл, путь в `saved_to`. `timeout_sec` — 1–120 (по умолчанию 25). Команды установки и удаления здесь **отклоняются** — их надо выполнять через `system_change`. |
+| `system_change(command, timeout_sec, background, cwd, max_chars, cursor)` | Установка, удаление ПО и удаление данных на хосте — «подтверждаемый» двойник `bash_exec` и единственный инструмент, которому разрешены `apt`/`dnf`/`pacman`/`pip`/`npm`/`winget`/`msiexec`/`rm`/`Remove-Item` и работа с дисками. Объявлен деструктивным, поэтому Gemini спрашивает подтверждение. `background=true` запускает его как фоновую задачу (для долгих установок) и возвращает `job_id` для `job_output`; `cwd` действует только в этом режиме. |
 
 ### Файлы
 

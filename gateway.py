@@ -959,8 +959,11 @@ async def messages_endpoint(request: Request):
                         f"Execute a shell command directly on {user}'s host machine. "
                         "The shell follows the host: bash on Linux/macOS, PowerShell or cmd.exe "
                         "on Windows - call system_info first and match command_shell. "
-                        "MANDATORY: Always use this tool to inspect git status, run builds, check processes, or execute tasks. "
-                        "NEVER guess command outputs."
+                        "Use it to inspect git status, run builds, check processes or run tasks, "
+                        "and NEVER guess command outputs. Commands that install or remove "
+                        "software, or that delete data, are refused here: this tool runs without "
+                        "a confirmation dialog, so those must go through system_change, where the "
+                        "user is asked to confirm first."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -969,6 +972,37 @@ async def messages_endpoint(request: Request):
                                 "type": "string",
                                 "description": "Shell command to execute on the node"
                             }
+                        },
+                        "required": ["command"]
+                    }
+                },
+                {
+                    "name": "system_change",
+                    "description": (
+                        "Install or remove software, or delete data, on the host - the only tool "
+                        "allowed to run those commands, and the one the user is asked to confirm "
+                        "before it runs. Same shell as bash_exec (check command_shell from "
+                        "system_info first). Use it for package managers (apt/dnf/pacman/apk/brew/"
+                        "pip/npm/winget/msiexec/...), uninstallers, rm / Remove-Item / del, disk "
+                        "wipes and anything else that installs, removes or destroys. Set "
+                        "background=true for long installs and poll with job_output. Ordinary "
+                        "inspection, builds and tests belong in bash_exec / run_job instead."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string",
+                                        "description": "The install / remove / delete command"},
+                            "timeout_sec": {"type": "integer",
+                                            "description": "Foreground only: 1-120 seconds (default 25)"},
+                            "background": {"type": "boolean",
+                                           "description": "Run it as a background job and return a job_id"},
+                            "cwd": {"type": "string",
+                                    "description": "Working directory; background=true only"},
+                            "max_chars": {"type": "integer",
+                                          "description": "Maximum characters per response"},
+                            "cursor": {"type": "integer",
+                                       "description": "Character offset to continue from"}
                         },
                         "required": ["command"]
                     }
@@ -1086,7 +1120,9 @@ async def messages_endpoint(request: Request):
                 {
                     "name": "run_job",
                     "description": (
-                        "Start a long command in the background; returns job_id."
+                        "Start a long command in the background; returns job_id. Installs, "
+                        "removals and deletions are refused here (this tool has no confirmation "
+                        "step) - run those with system_change(background=true)."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -1204,54 +1240,26 @@ async def messages_endpoint(request: Request):
             else:
                 content_text = json.dumps(res, ensure_ascii=False, indent=2)
         elif name in ("bash_exec", "list_dir", "read_file"):
-            # Gateway-level guard: call_remote_tool gives up after 28s, so never forward
-            # a bash timeout longer than 25s (node may default to 25 anyway).
+            refusal = ""
             if name == "bash_exec":
-                timeout_sec = args.get("timeout_sec")
-                if isinstance(timeout_sec, (int, float)) and timeout_sec > 25:
-                    args = dict(args)
-                    args["timeout_sec"] = 25
-            res = await call_remote_tool(user, name, args)
-            if "error" in res:
-                is_error = True
-                content_text = f"[Execution Error]: {res.get('error')}"
-            else:
-                exit_code = res.get("exit_code", 0)
-                # Never strip: a paginated chunk must survive byte-exact so the
-                # client can rebuild the output by following next_cursor.
-                stdout = res.get("stdout", "")
-                stderr = res.get("stderr", "")
-                if exit_code != 0:
-                    is_error = True
-                    # A non-zero exit code is the command's own result, not a
-                    # transport failure: the command RAN on the host. Without this
-                    # wording a model reads isError=true as "the node is
-                    # unreachable" and stops looking for the real output.
-                    parts = [
-                        f"[Exit code: {exit_code}] The command ran on the host and the node "
-                        f"is reachable; {exit_code} is the command's own exit status."
-                    ]
-                    if stderr.strip():
-                        parts.append(stderr)
-                    if stdout.strip():
-                        parts.append(stdout)
-                    content_text = "\n".join(parts) if parts else f"[Exit code: {exit_code}]"
+                kind = classify_command(args.get("command"))
+                if kind:
+                    # Installs and deletions only run through system_change, which the
+                    # client confirms; this tool is advertised as read-only.
+                    refusal = command_confirmation_message(args.get("command", ""), kind, "bash_exec")
                 else:
-                    parts = []
-                    if stdout:
-                        parts.append(stdout)
-                    if stderr:
-                        parts.append(f"[STDERR]\n{stderr}")
-                    content_text = "\n\n".join(parts) if parts else "(Command executed successfully with no output)"
-                # Surface node-side pagination/spooling so the model knows there is more.
-                if isinstance(res, dict):
-                    if res.get("next_cursor") is not None:
-                        content_text += (
-                            f"\n\n[output continues on the node: call {name} again with "
-                            f"cursor={res.get('next_cursor')} (optionally a larger max_chars)]"
-                        )
-                    if res.get("saved_to"):
-                        content_text += f"\n\n[full output saved on the node at {res['saved_to']}]"
+                    # Gateway-level guard: call_remote_tool gives up after 28s, so never
+                    # forward a bash timeout longer than 25s (the node defaults to 25).
+                    timeout_sec = args.get("timeout_sec")
+                    if isinstance(timeout_sec, (int, float)) and timeout_sec > 25:
+                        args = dict(args)
+                        args["timeout_sec"] = 25
+            if refusal:
+                is_error = True
+                content_text = refusal
+            else:
+                res = await call_remote_tool(user, name, args)
+                content_text, is_error = format_command_result(res, name)
         elif name in ("write_file", "edit_file"):
             res = await call_remote_tool(user, name, args)
             err = remote_tool_error(res)
@@ -1296,18 +1304,51 @@ async def messages_endpoint(request: Request):
                 if res.get("truncated"):
                     content_text += f"\n\n(truncated: showing first {len(files)} paths)"
         elif name == "run_job":
-            res = await call_remote_tool(user, name, args)
-            err = remote_tool_error(res)
-            if err:
+            kind = classify_command(args.get("command"))
+            if kind:
+                # Same rule as bash_exec: the unconfirmed tools never install or
+                # delete anything, not even in the background.
                 is_error = True
-                content_text = f"[Error] {err}"
+                content_text = command_confirmation_message(args.get("command", ""), kind, "run_job")
             else:
-                job_id = res.get("job_id", "")
-                content_text = (
-                    f"Started job {job_id} (pid {res.get('pid')})\n"
-                    f"command: {res.get('command', args.get('command', ''))}\n"
-                    f"Use job_output(job_id=\"{job_id}\") to poll progress; use job_kill(job_id=\"{job_id}\") to stop it."
-                )
+                res = await call_remote_tool(user, name, args)
+                err = remote_tool_error(res)
+                if err:
+                    is_error = True
+                    content_text = f"[Error] {err}"
+                else:
+                    content_text = format_job_started(res, args)
+        elif name == "system_change":
+            # The confirmed twin of bash_exec/run_job. The client asks the user
+            # before this call because the tool is advertised destructiveHint=true;
+            # the node itself only ever sees bash_exec or run_job, so this works with
+            # every node version, including payloads older than this gateway.
+            background = _wants_background(args)
+            forwarded = dict(args)
+            forwarded.pop("background", None)
+            if background:
+                forwarded.pop("timeout_sec", None)
+                forwarded.pop("max_chars", None)
+                forwarded.pop("cursor", None)
+                remote_name = "run_job"
+            else:
+                # bash_exec has no cwd of its own; the command runs in the node's
+                # workspace unless the caller asked for a background job.
+                forwarded.pop("cwd", None)
+                timeout_sec = forwarded.get("timeout_sec")
+                if isinstance(timeout_sec, (int, float)) and timeout_sec > 25:
+                    forwarded["timeout_sec"] = 25
+                remote_name = "bash_exec"
+            res = await call_remote_tool(user, remote_name, forwarded)
+            if remote_name == "run_job":
+                err = remote_tool_error(res)
+                if err:
+                    is_error = True
+                    content_text = f"[Error] {err}"
+                else:
+                    content_text = format_job_started(res, forwarded)
+            else:
+                content_text, is_error = format_command_result(res, remote_name)
         elif name == "job_output":
             # Gateway-level guard: call_remote_tool gives up after 28s, keep wait below it.
             wait_ms = args.get("wait_ms")
@@ -1738,6 +1779,189 @@ def _relay_headers(raw) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Confirmation policy for shell commands: install / delete go to system_change
+# ---------------------------------------------------------------------------
+# bash_exec and run_job are advertised with readOnlyHint=true (see the policy
+# below), and Gemini Spark - like any client that keys its approval dialog on that
+# hint - runs them without asking. That promise is kept for the two classes the
+# operator wants gated: a command that installs or removes software, or that
+# deletes data, is refused, and the model is told to route it through
+# system_change, which is advertised destructiveHint=true and therefore IS
+# confirmed by the client before the call reaches the node.
+#
+# The check is deliberately conservative: a verb has to sit at the start of a
+# command segment, after stripping sudo/env/timeout/`powershell -Command`
+# prefixes, so `echo "rm -rf /"`, `grep rm notes.txt` and `git log --grep install`
+# all still run. It is a UX gate, not a sandbox - MESH_READ_ONLY on the node is the
+# hard boundary.
+_SEGMENT_RE = re.compile(r"[;&|\n]+")
+_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:sudo|doas|command|nohup|env|time|nice|"
+    r"timeout\s+\d+(?:\.\d+)?|"
+    r"(?:powershell|pwsh)(?:\.exe)?(?:\s+-[\w:]+)*|"
+    r"cmd(?:\.exe)?\s+/[cCkK]|"
+    r"&\s+|start\s+)\s+|\w+=\S+\s+)*"
+)
+INSTALL_COMMAND_PATTERNS = (
+    r"apt(?:-get)?\s+(?:install|remove|purge|autoremove|dist-upgrade|full-upgrade)\b",
+    r"aptitude\s+(?:install|remove|purge)\b",
+    r"dnf\s+(?:install|remove|erase|update|upgrade|autoremove|groupinstall)\b",
+    r"yum\s+(?:install|remove|erase|update|upgrade|groupinstall)\b",
+    r"zypper\s+(?:install|remove|rm|update|up|dup|patch)\b",
+    r"pacman\s+-[A-Za-z]*[SR][A-Za-z]*\b",
+    r"apk\s+(?:add|del|delete)\b",
+    r"brew\s+(?:install|uninstall|remove|upgrade|reinstall)\b",
+    r"(?:pip|pip3|pipx)\s+(?:install|uninstall)\b",
+    r"(?:python|python3|py)\s+-m\s+pip\s+(?:install|uninstall)\b",
+    r"(?:npm|pnpm|yarn)\s+(?:install|i|ci|add|uninstall|remove|rm|up|upgrade)\b",
+    r"winget\s+(?:install|uninstall|upgrade)\b",
+    r"(?:choco|scoop)\s+(?:install|uninstall|upgrade|remove)\b",
+    r"(?:snap|flatpak)\s+(?:install|remove|uninstall|refresh|update)\b",
+    r"(?:gem|cargo|dotnet)\s+(?:install|uninstall|tool\s+(?:install|uninstall)|"
+    r"add\s+package|remove\s+package)\b",
+    r"go\s+install\b",
+    r"msiexec(?:\.exe)?\s+/[ix]\b",
+    r"dpkg\s+-[A-Za-z]*[irP][A-Za-z]*\b",
+    r"rpm\s+-[A-Za-z]*[ieU][A-Za-z]*\b",
+    r"(?:install|uninstall)-(?:module|package|script|psresource|windowsfeature)\b",
+    r"(?:add|remove)-(?:appxpackage|windowsoptionalfeature|windowsfeature|"
+    r"provisionedappxpackage)\b",
+    r"\b(?:iex|invoke-expression)\b",
+)
+DELETE_COMMAND_PATTERNS = (
+    r"rm\s+(?:-\S+\s+)*\S",
+    r"(?:rmdir|rd|unlink|shred|srm)\s+\S",
+    r"(?:del|erase)\s+\S",
+    r"deltree\b",
+    r"remove-item\b",
+    r"ri\s+(?:-\S+\s+)*\S",
+    r"clear-content\b",
+    r"remove-itemproperty\b",
+    r"(?:format-volume|clear-disk|remove-partition)\b",
+    r"(?:mkfs(?:\.\w+)?|wipefs|blkdiscard|fdisk|parted)\b",
+    r"dd\s+",
+    r"truncate\s+-s\s*0\b",
+    r"git\s+clean\s+-\S*[fdx]",
+    r"git\s+rm\b",
+    r"docker\s+(?:rm|rmi)\b",
+    r"docker\s+(?:system|volume|image|container|builder)\s+prune\b",
+    r"kubectl\s+delete\b",
+    r"vssadmin\s+delete\b",
+    r"bcdedit\s+/delete\b",
+    r"(?:userdel|groupdel|deluser|delgroup)\b",
+)
+_INSTALL_RE = re.compile("|".join(INSTALL_COMMAND_PATTERNS), re.IGNORECASE)
+_DELETE_RE = re.compile("|".join(DELETE_COMMAND_PATTERNS), re.IGNORECASE)
+# `curl … | sh` is the installer idiom and never looks like a package manager.
+_PIPE_TO_SHELL_RE = re.compile(
+    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b", re.IGNORECASE
+)
+_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def _wants_background(args) -> bool:
+    """True when the caller asked for system_change in the background."""
+    if not isinstance(args, dict):
+        return False
+    value = args.get("background")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in _TRUE_VALUES
+
+
+def classify_command(command) -> str:
+    """Return "install", "delete" or "" for a shell command.
+
+    "" means the command may run in the unconfirmed tools; anything else has to go
+    through system_change, where the client asks the user first.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return ""
+    if _PIPE_TO_SHELL_RE.search(command):
+        return "install"
+    for segment in _SEGMENT_RE.split(command):
+        stripped = _PREFIX_RE.sub("", segment).strip().lstrip("\"'`").lstrip()
+        if not stripped:
+            continue
+        if _INSTALL_RE.match(stripped):
+            return "install"
+        if _DELETE_RE.match(stripped):
+            return "delete"
+    return ""
+
+
+def command_confirmation_message(command: str, kind: str, tool: str) -> str:
+    """The refusal a model gets instead of running a gated command unconfirmed."""
+    what = ("installs or removes software" if kind == "install"
+            else "deletes data")
+    return (
+        f"[Confirmation required] This command {what}, so it was not run.\n"
+        f"{tool} is advertised as read-only and therefore runs without a confirmation "
+        f"dialog; the operator's rule is to be asked before anything is installed or "
+        f"deleted. Call system_change with the same command - that tool is advertised "
+        f"as destructive, so the user is asked to confirm it first.\n"
+        f"command: {command.strip() if isinstance(command, str) else command}\n"
+        f"Do not rephrase, split, encode or otherwise obfuscate the command to get around "
+        f"this; route it through system_change."
+    )
+
+
+def format_command_result(res, name: str):
+    """(text, is_error) for a bash_exec / system_change / list_dir / read_file reply."""
+    if "error" in res:
+        return (f"[Execution Error]: {res.get('error')}", True)
+    is_error = False
+    exit_code = res.get("exit_code", 0)
+    # Never strip: a paginated chunk must survive byte-exact so the
+    # client can rebuild the output by following next_cursor.
+    stdout = res.get("stdout", "")
+    stderr = res.get("stderr", "")
+    if exit_code != 0:
+        is_error = True
+        # A non-zero exit code is the command's own result, not a
+        # transport failure: the command RAN on the host. Without this
+        # wording a model reads isError=true as "the node is
+        # unreachable" and stops looking for the real output.
+        parts = [
+            f"[Exit code: {exit_code}] The command ran on the host and the node "
+            f"is reachable; {exit_code} is the command's own exit status."
+        ]
+        if stderr.strip():
+            parts.append(stderr)
+        if stdout.strip():
+            parts.append(stdout)
+        content_text = "\n".join(parts) if parts else f"[Exit code: {exit_code}]"
+    else:
+        parts = []
+        if stdout:
+            parts.append(stdout)
+        if stderr:
+            parts.append(f"[STDERR]\n{stderr}")
+        content_text = "\n\n".join(parts) if parts else "(Command executed successfully with no output)"
+    # Surface node-side pagination/spooling so the model knows there is more.
+    if isinstance(res, dict):
+        if res.get("next_cursor") is not None:
+            content_text += (
+                f"\n\n[output continues on the node: call {name} again with "
+                f"cursor={res.get('next_cursor')} (optionally a larger max_chars)]"
+            )
+        if res.get("saved_to"):
+            content_text += f"\n\n[full output saved on the node at {res['saved_to']}]"
+    return (content_text, is_error)
+
+
+def format_job_started(res, args) -> str:
+    """The reply for run_job and for system_change(background=true)."""
+    job_id = res.get("job_id", "")
+    return (
+        f"Started job {job_id} (pid {res.get('pid')})\n"
+        f"command: {res.get('command', (args or {}).get('command', ''))}\n"
+        f"Use job_output(job_id=\"{job_id}\") to poll progress; "
+        f"use job_kill(job_id=\"{job_id}\") to stop it."
+    )
+
+
+# ---------------------------------------------------------------------------
 # MCP tool annotations: when the client may run a tool without asking first
 # ---------------------------------------------------------------------------
 # Gemini Spark reads ``Tool.annotations`` from ``tools/list`` to decide whether it
@@ -1748,10 +1972,12 @@ def _relay_headers(raw) -> dict:
 # really install something (mesh_update) or delete/revoke it (unshare), and
 # removes it from read-only and ordinary local work.
 #
-# This table is a deliberate copy of ``core/mcp_tools.TOOL_ANNOTATIONS``: the
-# gateway deploys as one file and may not import node code, so
-# tests/test_gateway_share_route.py compares the advertised annotations with the
-# node's TOOLS and fails the build on drift.
+# This table is the gateway's own: the gateway deploys as one file and may not
+# import node code, so tests/test_gateway_share_route.py compares the advertised
+# hints with the node's TOOLS. Two differences are deliberate and pinned there:
+# system_change exists only here (it is translated to bash_exec/run_job before the
+# node sees it), and bash_exec/run_job are read-only *here* because this is the
+# surface the client reads and the classification above enforces the rule.
 _ANNOT_READ_ONLY = {
     "readOnlyHint": True,
     "destructiveHint": False,
@@ -1795,9 +2021,12 @@ TOOL_ANNOTATIONS = {
     "job_output": _ANNOT_READ_ONLY,
     "job_list": _ANNOT_READ_ONLY,
     "share_list": _ANNOT_READ_ONLY,
-    # local work: writes and commands, but no install and no delete
-    "bash_exec": _ANNOT_LOCAL_WRITE,
-    "run_job": _ANNOT_LOCAL_WRITE,
+    # local work: writes and commands, but no install and no delete. bash_exec and
+    # run_job are advertised read-only *by this gateway* so the client stops asking
+    # before every command; the classification above keeps that honest by refusing
+    # the two classes the operator wants gated and routing them to system_change.
+    "bash_exec": _ANNOT_READ_ONLY,
+    "run_job": _ANNOT_READ_ONLY,
     # Stopping a job is neither an install nor a delete, and bash_exec can
     # terminate the same process anyway, so no prompt is spent on it.
     "job_kill": _ANNOT_LOCAL_WRITE,
@@ -1807,6 +2036,7 @@ TOOL_ANNOTATIONS = {
     "share_file": _ANNOT_PUBLISH,
     "serve_dir": _ANNOT_PUBLISH,
     # destructive: install or delete/revoke -> confirm first
+    "system_change": _ANNOT_DESTRUCTIVE,
     "mesh_update": _ANNOT_DESTRUCTIVE,
     "unshare": _ANNOT_DESTRUCTIVE,
 }
