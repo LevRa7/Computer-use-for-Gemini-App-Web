@@ -978,6 +978,27 @@ async def messages_endpoint(request: Request):
                     "inputSchema": {"type": "object", "properties": {}, "required": []}
                 },
                 {
+                    "name": "mesh_update",
+                    "description": ("Report, check for, or install a newer release of the node's own "
+                                    "code. action=status reads local state; action=check asks GitHub; "
+                                    "action=apply installs it and restarts the agent (the tunnel "
+                                    "drops for a few seconds). Default action is status."),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["status", "check", "apply"],
+                                       "description": "What to do (default: status)"},
+                            "force": {"type": "boolean",
+                                      "description": "Ignore the check interval and the failed-apply backoff"},
+                            "offline": {"type": "boolean",
+                                        "description": "check: cached answer only, no network"},
+                            "restart": {"type": "boolean",
+                                        "description": "apply: restart the node afterwards (default true)"}
+                        },
+                        "required": []
+                    }
+                },
+                {
                     "name": "system_info",
                     "description": ("One-call host summary: OS, desktop, user, home, disks, memory, load, "
                                     "top processes and the current wallpaper. Prefer this over several "
@@ -1126,10 +1147,33 @@ async def messages_endpoint(request: Request):
             else:
                 parts = ["[NODE REACHABLE] This answer was produced on the host itself - the mesh "
                          "agent and the tunnel are working. Do not claim the node is offline."]
-                for key in ("hostname", "agent_pid", "checked_at", "host_uptime_human", "workspace"):
+                for key in ("hostname", "agent_pid", "checked_at", "host_uptime_human",
+                            "workspace", "node_version"):
                     if res.get(key) is not None:
                         parts.append(f"{key}: {res.get(key)}")
                 content_text = "\n".join(parts)
+        elif name == "mesh_update":
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                parts = []
+                if res.get("current"):
+                    parts.append(f"node version: {res['current']}")
+                if res.get("latest"):
+                    parts.append(f"newest release: {res['latest']}")
+                if res.get("update_available") is not None:
+                    parts.append("update available: %s"
+                                 % ("yes" if res.get("update_available") else "no"))
+                if res.get("applied"):
+                    parts.append("applied: %s -> %s"
+                                 % (res.get("current"), res.get("latest")))
+                    parts.append("node is restarting; the tunnel drops for a few seconds")
+                elif res.get("reason"):
+                    parts.append(f"detail: {res['reason']}")
+                content_text = "\n".join(parts) if parts else json.dumps(res, ensure_ascii=False, indent=2)
         elif name == "system_info":
             res = await call_remote_tool(user, name, args)
             err = remote_tool_error(res)

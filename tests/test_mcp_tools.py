@@ -79,6 +79,9 @@ def test_tools_surface_contains_all_tools():
         "job_output",
         "job_kill",
         "job_list",
+        # Self-update, added before the share surface so the pre-existing order of
+        # the fifteen tools above is untouched.
+        "mesh_update",
         # Public shares, last so the pre-existing surface keeps its order. The
         # deployed gateway advertises the same four names; the internal relay
         # ("_http_share") is deliberately not part of TOOLS.

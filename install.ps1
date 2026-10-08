@@ -461,9 +461,10 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
     $BootstrapDir = "$env:USERPROFILE\.gemini-computer-use"
     $CoreDir = "$BootstrapDir\core"
     $SkillsDir = "$BootstrapDir\skills"
-    # The watchdog and the doctor are fetched too: the scheduled task registered
-    # below runs the watchdog, and a node whose agent dies must be able to heal
-    # itself without anyone re-running the installer by hand.
+    # The watchdog, the doctor and the updater are fetched too: the scheduled
+    # tasks registered below run the first and the last, and a node whose agent
+    # dies - or whose code goes stale - must heal and update itself without
+    # anyone re-running the installer by hand.
     $OpsDir = "$BootstrapDir\ops\windows"
     if (!(Test-Path $CoreDir)) { New-Item -ItemType Directory -Path $CoreDir -Force | Out-Null }
     if (!(Test-Path $SkillsDir)) { New-Item -ItemType Directory -Path $SkillsDir -Force | Out-Null }
@@ -476,9 +477,12 @@ if (-not $ScriptDir -or -not (Test-Path "$ScriptDir\core\agent.py")) {
         "core/web_share.py",
         "core/domain.py",
         "core/vitals.py",
+        "core/updater.py",
+        "core/version.py",
         "core/__init__.py",
         "skills/orchestrator.md",
         "ops/windows/agent-watchdog.ps1",
+        "ops/update.ps1",
         "ops/doctor.ps1"
     )
     foreach ($f in $files) {
@@ -780,6 +784,65 @@ if (Test-Path -LiteralPath $watchdog) {
     Write-Host "[!] $watchdog не найден: самовосстановления у узла не будет." -ForegroundColor Yellow
 } else {
     Write-Host "[!] $watchdog not found: the node has no self-healing task." -ForegroundColor Yellow
+}
+
+# The watchdog above recovers a node that is DOWN; this task moves a node that is
+# merely OUT OF DATE. A machine nobody logs into would otherwise keep running
+# whatever was installed the day it was set up, so the updater checks the newest
+# GitHub release once a day, installs it with a rollback backup and lets its
+# helper bring the agent back on the new code. The agent also checks for itself
+# (MESH_UPDATE_* in core/updater.py); this task is what covers a node whose agent
+# is not running at 03:30.
+$updaterScript = Join-Path $ScriptDir 'ops\update.ps1'
+if (Test-Path -LiteralPath $updaterScript) {
+    $updaterActionCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $updaterScript + '" -Quiet'
+    $updaterTaskCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $updaterScript + '\" -Quiet'
+    $updaterRegistered = $false
+    $updaterError = ''
+    # schtasks.exe first, for the same reason as the watchdog: it needs no write
+    # access to the task store, which a normal user does not have on a hardened
+    # or domain-joined machine.
+    $updaterError = (& schtasks.exe /Create /TN 'AntigravityMeshUpdater' /TR $updaterTaskCommand `
+        /SC DAILY /MO 1 /ST 03:30 /F 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) { $updaterRegistered = $true }
+    if (-not $updaterRegistered) {
+        try {
+            $updaterAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $updaterActionCommand -WorkingDirectory $ScriptDir
+            $updaterTriggers = @((New-ScheduledTaskTrigger -Daily -At '03:30'))
+            $updaterSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+            Register-ScheduledTask -TaskName 'AntigravityMeshUpdater' -Action $updaterAction `
+                -Trigger $updaterTriggers -Settings $updaterSettings -Force `
+                -Description 'Updates the Antigravity Mesh node from the newest GitHub release.' | Out-Null
+            $updaterRegistered = $true
+            $updaterError = ''
+        } catch {
+            $updaterRegistered = $false
+            $updaterError = $_.Exception.Message
+        }
+    }
+    if ($updaterRegistered) {
+        if ($Lang -eq "ru") {
+            Write-Host "[OK] Задача обновления 'AntigravityMeshUpdater' зарегистрирована (ежедневно в 03:30)." -ForegroundColor Green
+            Write-Host "    Проверить сейчас: powershell -File `"$updaterScript`" -Check" -ForegroundColor DarkGray
+        } else {
+            Write-Host "[OK] Update task 'AntigravityMeshUpdater' registered (daily at 03:30)." -ForegroundColor Green
+            Write-Host "    Check right now: powershell -File `"$updaterScript`" -Check" -ForegroundColor DarkGray
+        }
+    } else {
+        if ($Lang -eq "ru") {
+            Write-Host "[!] Не удалось зарегистрировать задачу обновления. Узел всё равно проверяет версию сам, пока агент запущен." -ForegroundColor Yellow
+            Write-Host "    Запустить проверку вручную: powershell -File `"$updaterScript`" -Check" -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] Could not register the update task. A running agent still checks for releases itself." -ForegroundColor Yellow
+            Write-Host "    Check by hand: powershell -File `"$updaterScript`" -Check" -ForegroundColor Yellow
+        }
+        if ($updaterError) { Write-Host "    $updaterError" -ForegroundColor DarkYellow }
+    }
+} elseif ($Lang -eq "ru") {
+    Write-Host "[!] $updaterScript не найден: автоматического обновления у узла не будет." -ForegroundColor Yellow
+} else {
+    Write-Host "[!] $updaterScript not found: the node has no automatic update task." -ForegroundColor Yellow
 }
 
 # Launch now

@@ -47,6 +47,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 #: keeping a fallback chain of its own. Standard library only, so importing it here
 #: costs nothing and cannot fail for a missing third-party package.
 from core import domain
+from core import updater
+from core import version as version_module
 
 # ---------------------------------------------------------------------------
 # Optional dependency: the host vitals collector.  Kept optional so the module
@@ -736,7 +738,52 @@ def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
     if uptime_s is not None:
         payload["host_uptime_seconds"] = int(uptime_s)
         payload["host_uptime_human"] = "%dh %dm" % (int(uptime_s // 3600), int((uptime_s % 3600) // 60))
+    payload["node_version"] = version_module.__version__
+    try:
+        # Local state only: a status call must never wait on the network.
+        state = updater.status()
+        payload["update"] = {
+            "latest": state.get("latest") or "",
+            "update_available": state.get("update_available"),
+            "last_check": state.get("last_check") or "",
+            "last_applied": state.get("last_applied") or "",
+            "auto": state.get("auto"),
+        }
+    except Exception as exc:                   # diagnostics never break the answer
+        payload["update"] = {"error": str(exc)}
     return payload
+
+
+def _parse_flag(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _tool_mesh_update(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Report, check for, or install a newer release of this node's own code.
+
+    ``status`` reads local state only; ``check`` asks GitHub; ``apply`` downloads
+    the release payload, verifies its published SHA-256, swaps it in with a
+    backup and restarts the agent (the tunnel drops for a few seconds). Applying
+    is refused in read-only mode, where every other mutation is refused too.
+    """
+    action = str(args.get("action") or "status").strip().lower()
+    force = _parse_flag(args.get("force"))
+    if action in ("status", "state", "info"):
+        return updater.status()
+    if action in ("check", "check_update", "latest"):
+        return updater.check_for_update(force=force, offline=_parse_flag(args.get("offline")))
+    if action in ("apply", "install", "update", "upgrade"):
+        if _READ_ONLY:
+            return {"error": "this node is read-only (MESH_READ_ONLY=1); "
+                             "self-update is disabled"}
+        restart = args.get("restart")
+        return updater.apply_update(force=force,
+                                    restart=None if restart is None else _parse_flag(restart))
+    return {"error": "unknown action %r: use status, check or apply" % action}
 
 
 # ---------------------------------------------------------------------------
@@ -2245,6 +2292,29 @@ TOOLS: List[Dict[str, Any]] = [
         }),
     },
     {
+        "name": "mesh_update",
+        "title": "Mesh Update (self-update)",
+        "description": (
+            "Report, check for, or install a newer release of this node's own code from "
+            "GitHub. action=status reads local state without network; action=check asks "
+            "GitHub Releases; action=apply downloads the release payload, verifies its "
+            "published SHA-256, installs it with a rollback backup and restarts the agent "
+            "(the tunnel drops for a few seconds; the tool result is still sent first). "
+            "Use status or check first, and apply only when the operator wants this node "
+            "updated now."
+        ),
+        "inputSchema": _schema({
+            "action": {"type": "string", "enum": ["status", "check", "apply"],
+                       "description": "What to do (default: status)."},
+            "force": {"type": "boolean",
+                      "description": "Ignore the check interval and the failed-apply backoff."},
+            "offline": {"type": "boolean",
+                        "description": "check: report the cached answer without touching the network."},
+            "restart": {"type": "boolean",
+                        "description": "apply: restart the node afterwards (default true)."},
+        }),
+    },
+    {
         "name": "share_file",
         "title": "Share File (public URL)",
         "description": (
@@ -2313,6 +2383,7 @@ TOOLS: List[Dict[str, Any]] = [
 
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "mesh_status": _tool_mesh_status,
+    "mesh_update": _tool_mesh_update,
     "system_info": _tool_system_info,
     "system_vitals": _tool_system_vitals,
     "get_orchestration_skill": _tool_get_orchestration_skill,

@@ -4,9 +4,10 @@
 | :--- | :--- |
 | `agent-watchdog.ps1` | single-shot supervisor: check the node, restart the agent if it is dead |
 | `../doctor.ps1` | read-only diagnostic: report every fact that explains an offline node |
+| `../update.ps1` | single-shot updater: install a newer release and let the node restart onto it |
 
-Both are ASCII-only Windows PowerShell 5.1 scripts and use nothing but in-box
-cmdlets. Neither one needs the task scheduler to be running in order to work.
+All three are ASCII-only Windows PowerShell 5.1 scripts and use nothing but in-box
+cmdlets. None of them needs the task scheduler to be running in order to work.
 
 ## Why they exist
 
@@ -138,6 +139,45 @@ Register-ScheduledTask -TaskName 'AntigravityMeshWatchdog' -Action $action `
 The `ops\` directory must travel with the payload: it has to be listed in
 `package.json` (`files`), in `build-installer-exe.ps1` (`$PAYLOAD`) and in
 whatever `deploy_gateway.sh` stages for the node bootstrap.
+
+## `../update.ps1` - single-shot self-update
+
+Run once a day by the Scheduled Task **`AntigravityMeshUpdater`**, and by hand as
+`gemini-computer-use update [-Check]`.
+
+| Parameter | Default | Meaning |
+| :--- | :--- | :--- |
+| `-Check` | off | report only; never download or replace anything |
+| `-Force` | off | ignore the check interval and the failed-attempt backoff |
+| `-NoRestart` | off | install the payload but do not restart the agent |
+| `-Offline` | off | with `-Check`: report the cached answer, touch no network |
+| `-Json` | off | print the updater's JSON answer verbatim |
+| `-InstallDir` | from the Startup `.vbs` | payload directory |
+| `-Python` | from the Startup `.vbs` | interpreter to run the updater with |
+| `-ConfigDir` | `%USERPROFILE%\.config\antigravity-mesh` | where `agent.env` and `agent.heartbeat` live |
+| `-LogFile` | `<ConfigDir>\update-task.log` | this script's own journal |
+| `-Quiet` | off | log only, no console output |
+
+It resolves the install directory and the interpreter the same way the watchdog
+does - from the Startup launcher `install.ps1` wrote - and **refuses the Microsoft
+Store alias** for the same reason: that alias never runs Python. The work itself is
+done by `python -m core.updater` (`--check` or `--apply`), which downloads the
+release payload, verifies its published SHA-256, swaps it in with a rollback backup
+and starts a helper that brings the agent back. See
+[docs/UPDATES.md](../../docs/UPDATES.md).
+
+| Exit code | Meaning |
+| :--- | :--- |
+| `0` | the node is on the newest release, or was updated without a restart |
+| `2` | an update exists and was not installed (`-Check`), or the node is misconfigured |
+| `3` | the update failed: network, checksum mismatch, unusable payload |
+| `4` | the update was installed and the node is restarting |
+
+Register it as **`AntigravityMeshUpdater`**: action `powershell.exe`, arguments
+`-NoProfile -ExecutionPolicy Bypass -File "<payload>\ops\update.ps1" -Quiet`,
+working directory the payload directory, trigger daily (the installer uses 03:30),
+settings `-MultipleInstances IgnoreNew` and `-StartWhenAvailable` (so a machine that
+was off at 03:30 updates at the next opportunity).
 
 ---
 

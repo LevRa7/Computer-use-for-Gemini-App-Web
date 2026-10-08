@@ -95,11 +95,11 @@ if [ "$WITH_NODE_CODE" = true ]; then
     for f in core/*.py skills/*.md; do
         [ -f "$f" ] && NODE_FILES+=("$f")
     done
-    # The Windows watchdog and the doctor ship with the node code: install.ps1
-    # registers the scheduled task that runs the watchdog and points the operator
-    # at the doctor, so a node that bootstraps itself from this domain must be able
-    # to download both.
-    for f in ops/windows/agent-watchdog.ps1 ops/doctor.ps1; do
+    # The Windows watchdog, the doctor and the updater ship with the node code:
+    # install.ps1 registers the scheduled tasks that run the watchdog and the
+    # updater, and points the operator at the doctor, so a node that bootstraps
+    # itself from this domain must be able to download all three.
+    for f in ops/windows/agent-watchdog.ps1 ops/doctor.ps1 ops/update.ps1; do
         [ -f "$f" ] && NODE_FILES+=("$f")
     done
 fi
@@ -273,6 +273,10 @@ fi
 if [ -f \"$STAGE/ops/doctor.ps1\" ]; then
     mkdir -p $WWW_DIR/ops
     install -o root -g root -m 644 \"$STAGE/ops/doctor.ps1\" $WWW_DIR/ops/doctor.ps1
+fi
+if [ -f \"$STAGE/ops/update.ps1\" ]; then
+    mkdir -p $WWW_DIR/ops
+    install -o root -g root -m 644 \"$STAGE/ops/update.ps1\" $WWW_DIR/ops/update.ps1
 fi"
 fi
 

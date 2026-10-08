@@ -21,6 +21,9 @@ Configuration (read once at import/startup)::
     MESH_READ_ONLY    "1"/"true" -> mutating tools refuse to run
     MESH_WRITE_ROOTS  pathsep-separated list of roots allowed for writes
 
+    MESH_UPDATE_*      self-update: see core/updater.py. A running node checks for a
+                       newer GitHub release in the background and installs it
+ 
 Resilience contract:
 
 * every link failure (DNS, TLS, reset, half-open socket after sleep) is retried
@@ -55,7 +58,8 @@ except ImportError as _websockets_error:      # a launcher pinned a Python witho
 else:
     _WEBSOCKETS_IMPORT_ERROR = None
 
-from core import domain, mcp_tools
+from core import domain, mcp_tools, updater
+from core import version as version_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("agy-agent")
@@ -225,6 +229,7 @@ def runtime_facts() -> dict:
             "python": "%d.%d.%d" % sys.version_info[:3],
             "interpreter": sys.executable or "",
             "websockets": version,
+            "node_version": version_module.__version__,
         }
     facts = dict(_RUNTIME_FACTS)
     # Read fresh: tests (and a re-configured process) may change these.
@@ -241,9 +246,10 @@ def log_runtime_banner() -> dict:
     which interpreter was expected.
     """
     facts = runtime_facts()
-    logger.info("Runtime: interpreter=%s python=%s websockets=%s cwd=%s pid=%s",
-                facts["interpreter"] or "<unknown>", facts["python"], facts["websockets"],
-                os.getcwd(), os.getpid())
+    logger.info("Runtime: node=%s interpreter=%s python=%s websockets=%s cwd=%s pid=%s",
+                facts.get("node_version") or version_module.__version__,
+                facts["interpreter"] or "<unknown>", facts["python"],
+                facts["websockets"], os.getcwd(), os.getpid())
     if _WEBSOCKETS_IMPORT_ERROR is not None:
         logger.error("The 'websockets' package is not importable by this interpreter (%s): %s. "
                      "The tunnel cannot start; run: %s -m pip install websockets",
@@ -369,6 +375,119 @@ def install_exit_markers() -> None:
             signal.signal(number, _on_signal)
         except Exception:
             continue
+
+
+# ---------------------------------------------------------------------------
+# Self-update
+#
+# The updater itself lives in core/updater.py and is deliberately unaware of this
+# module: it can check, download, verify and swap a payload with no agent around
+# (ops/update.ps1 and the CLI drive it that way). What only the agent can do is
+# stop cleanly so the swapped code is what runs next - that is the hook below.
+# ---------------------------------------------------------------------------
+
+#: The updater's last answer, carried in every heartbeat so ops/doctor.ps1 can
+#: show "a newer release exists" (or "the last check failed") without a network.
+_UPDATE_STATE: dict = {}
+_RESTART_EVENT = threading.Event()
+
+
+def note_update_state(result: dict) -> None:
+    """Record one updater answer in the heartbeat."""
+    if not isinstance(result, dict):
+        return
+    check = result.get("check") if isinstance(result.get("check"), dict) else result
+    payload = {
+        "current": check.get("current") or version_module.__version__,
+        "latest": check.get("latest") or "",
+        "available": bool(check.get("update_available")),
+        "checked_at": check.get("checked_at") or "",
+        "reason": str(check.get("reason") or "")[:200],
+    }
+    applied = result.get("apply")
+    if isinstance(applied, dict) and applied.get("applied"):
+        payload["applied"] = applied.get("to") or ""
+    _UPDATE_STATE.clear()
+    _UPDATE_STATE.update(payload)
+    _HEARTBEAT_STATE["update"] = dict(_UPDATE_STATE)
+    write_heartbeat()
+
+
+def request_restart(delay: float = 5.0) -> bool:
+    """Stop this agent (once) so the restart helper can start the updated copy.
+
+    The delay is what lets an in-flight tool result reach the caller: a
+    ``mesh_update`` call answers "applied and restarting" and only then does the
+    process leave, which is also what releases the tunnel and the instance lock
+    the new agent needs.
+    """
+    if _RESTART_EVENT.is_set():
+        return False
+    _RESTART_EVENT.set()
+    name = "SIGBREAK" if os.name == "nt" else "SIGTERM"
+    number = getattr(signal, name, None)
+    if number is None:
+        number = getattr(signal, "SIGTERM", None)
+
+    def _fire():
+        time.sleep(max(0.0, delay))
+        logger.warning("Stopping this agent so the updated version can start (signal %s).", name)
+        try:
+            signal.raise_signal(number)
+        except Exception:
+            # A platform without raise_signal still has to end up updated; the
+            # restart helper is already waiting for this pid either way.
+            os._exit(0)
+
+    threading.Thread(target=_fire, name="mesh-restart", daemon=True).start()
+    return True
+
+
+def start_update_thread():
+    """Check for a newer release in the background and install it.
+
+    The first check is delayed (``MESH_UPDATE_INITIAL_DELAY``, 90 s by default)
+    so a node that was just started - including one that was just updated - gets
+    its tunnel up and serves a few calls before anything restarts.
+    """
+    config = updater.config_from_env()
+    if not config["enabled"]:
+        logger.info("Self-update is disabled (MESH_UPDATE_CHECK=0).")
+        return None
+    # Registered even when automatic updating is off: an operator (or the model
+    # through mesh_update) can still ask for an update, and the node then has to
+    # stop itself for the new version to run.
+    updater.set_restart_hook(request_restart)
+    try:
+        initial = float(os.environ.get("MESH_UPDATE_INITIAL_DELAY", "") or 90.0)
+    except ValueError:
+        initial = 90.0
+
+    def _loop():
+        time.sleep(max(0.0, initial))
+        while True:
+            try:
+                result = updater.background_tick(config=config)
+                note_update_state(result)
+                check = result.get("check") or {}
+                applied = result.get("apply") or {}
+                if applied.get("applied"):
+                    logger.warning("Self-update: %s -> %s applied from %s; restarting.",
+                                   applied.get("from"), applied.get("to"), applied.get("asset"))
+                elif check.get("update_available"):
+                    logger.info("Self-update: release %s is available (%s).",
+                                check.get("latest"), check.get("reason"))
+                elif check.get("ok"):
+                    logger.debug("Self-update: up to date (%s).", check.get("current"))
+                else:
+                    logger.warning("Self-update check failed: %s", check.get("reason"))
+            except Exception as exc:      # the updater must never take the node down
+                logger.warning("Self-update iteration failed: %s", exc)
+            time.sleep(max(60, int(config["interval"])))
+
+    thread = threading.Thread(target=_loop, name="mesh-updater", daemon=True)
+    thread.start()
+    return thread
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +697,11 @@ def main() -> None:
     install_exit_markers()
     enable_fault_log()
     log_runtime_banner()
+    # An update that was interrupted mid-swap (a kill, a power cut) is settled
+    # here, before the tunnel starts: either finished or rolled back.
+    recovery = updater.recover_pending()
+    if recovery:
+        logger.warning("Self-update recovery: %s", recovery)
     start_heartbeat()
     if _WEBSOCKETS_IMPORT_ERROR is not None:
         # The banner above already named the interpreter and the missing module.
@@ -586,6 +710,9 @@ def main() -> None:
     _lock = wait_for_instance_lock(USER)  # held for the life of the process
     write_heartbeat()
     logger.info("Instance lock acquired: this is the only agent for node '%s'.", USER)
+    # Only the agent that owns the node updates it: a second instance waiting for
+    # the lock must not swap files under the process that is actually running.
+    start_update_thread()
     try:
         asyncio.run(run_agent())
     except KeyboardInterrupt:

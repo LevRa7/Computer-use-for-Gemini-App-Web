@@ -62,7 +62,7 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 ## 🛠️ What Gemini can do on your machine (MCP tools)
 
-**19 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
+**20 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
 
 ### Status and host information
 
@@ -122,6 +122,15 @@ These four make something on your machine readable from the internet. The link i
 | Tool | What it does |
 | :--- | :--- |
 | `get_orchestration_skill()` | Loads the agent's current operating rules and orchestration skill. |
+
+### Keeping the node up to date
+
+| Tool | What it does |
+| :--- | :--- |
+| `mesh_update(action, force, offline, restart)` | Reports, checks for or installs a newer release of the node's own code. `status` reads local state (no network), `check` asks GitHub, `apply` downloads the payload, verifies its published SHA-256, installs it with a rollback backup and restarts the agent. |
+
+> [!TIP]
+> Nodes update themselves: a running agent checks for a newer release in the background (every 6 hours by default) and installs what it finds, and on Windows the `AntigravityMeshUpdater` task checks once a day even when no agent is running. `MESH_UPDATE_AUTO=0` switches that to "report only". Details, environment variables and rollback: [docs/UPDATES.md](docs/UPDATES.md).
 
 > [!TIP]
 > Gemini gives a single tool call roughly 30 seconds. For anything longer (builds, backups, downloads) the agent uses `run_job` and polls `job_output`, so tasks never get cut off.
@@ -211,10 +220,10 @@ The release also ships a single compiled installer, for machines where you would
 not clone or download anything else — `AntigravityMesh-Setup-<version>.exe`:
 
 ```powershell
-.\AntigravityMesh-Setup-0.2.6.exe            # open the visual installer
-.\AntigravityMesh-Setup-0.2.6.exe -Lang ru   # start in Russian
-.\AntigravityMesh-Setup-0.2.6.exe -SelfTest  # headless self-check, prints JSON
-.\AntigravityMesh-Setup-0.2.6.exe --version  # print the version
+.\AntigravityMesh-Setup-0.3.0.exe            # open the visual installer
+.\AntigravityMesh-Setup-0.3.0.exe -Lang ru   # start in Russian
+.\AntigravityMesh-Setup-0.3.0.exe -SelfTest  # headless self-check, prints JSON
+.\AntigravityMesh-Setup-0.3.0.exe --version  # print the version
 ```
 
 It carries the wizard, `install.ps1`, `core/` and `install.sh` inside itself, unpacks them
@@ -266,6 +275,44 @@ The wizard does not offer it; use the console installer:
 ```
 
 That starts a local-only FastMCP server at `http://localhost:8096/sse` and puts that URL on the clipboard.
+
+---
+
+## 🔄 Automatic updates
+
+A node installs itself from a GitHub release and then keeps itself current the same
+way. You do not re-install anything by hand, and nothing unverified is installed.
+
+- **It checks by itself.** A running agent asks the GitHub Releases API every 6
+  hours (`MESH_UPDATE_CHECK_INTERVAL`), compares the tag with the version in
+  `core/version.py` and installs what it finds. On Windows the daily
+  `AntigravityMeshUpdater` task does the same for a machine whose agent is not
+  running. `MESH_UPDATE_AUTO=0` turns installing off and keeps reporting.
+- **It verifies before it installs.** The payload is downloaded, its SHA-256 is
+  compared with the published checksum, and only then are `core/`, `skills/` and
+  `ops/` replaced. No checksum, no update.
+- **It can always go back.** The replaced directories are saved under
+  `%USERPROFILE%\.config\antigravity-mesh\backups\<version>-<timestamp>\`, and an
+  update interrupted by a kill or a power cut is rolled back automatically on the
+  next start.
+- **The node comes back new.** The agent is restarted through whatever supervises
+  it (the watchdog task on Windows, `systemctl --user restart agy-agent.service`,
+  `launchctl kickstart -k`) — or started directly when nothing supervises it.
+
+By hand, any time:
+
+```powershell
+gemini-computer-use update -Check      # is a newer release published?
+gemini-computer-use update             # install it now and restart
+gemini-computer-use update -Check -Json
+```
+
+From Gemini: ask the node to run `mesh_update` (`status`, then `check`, then
+`apply`).
+
+The state of the last check is in the heartbeat, so `ops/doctor.ps1` shows it, and
+the full history is in `%USERPROFILE%\.config\antigravity-mesh\update.log`.
+Configuration, exit codes, rollback and troubleshooting: [docs/UPDATES.md](docs/UPDATES.md).
 
 ---
 
@@ -402,7 +449,7 @@ Gemini в браузере или на телефоне умеет разгов�
 
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
-**19 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+**20 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
 
 ### Состояние и сведения о хосте
 
@@ -462,6 +509,15 @@ Gemini в браузере или на телефоне умеет разгов�
 | Инструмент | Что делает |
 | :--- | :--- |
 | `get_orchestration_skill()` | Загружает текущие рабочие правила агента и навык оркестрации. |
+
+### Поддержание узла в актуальном состоянии
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `mesh_update(action, force, offline, restart)` | Сообщает, проверяет или устанавливает новую версию кода самого узла. `status` — локальное состояние (без сети), `check` — запрос к GitHub, `apply` — скачивает payload, проверяет опубликованный SHA-256, ставит с бэкапом для отката и перезапускает агент. |
+
+> [!TIP]
+> Узлы обновляются сами: работающий агент проверяет новые релизы в фоне (по умолчанию раз в 6 часов) и устанавливает найденное, а на Windows задача `AntigravityMeshUpdater` проверяет раз в сутки даже когда агент не запущен. `MESH_UPDATE_AUTO=0` переводит это в режим «только сообщать». Подробности, переменные окружения и откат: [docs/UPDATES.md](docs/UPDATES.md).
 
 > [!TIP]
 > Gemini даёт одному вызову инструмента около 30 секунд. Всё, что дольше (сборки, бэкапы, загрузки), агент запускает через `run_job` и забирает результат через `job_output` — задачи не обрываются.
@@ -551,10 +607,10 @@ https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ва�
 где не хочется ничего клонировать:
 
 ```powershell
-.\AntigravityMesh-Setup-0.2.6.exe            # открыть визуальный установщик
-.\AntigravityMesh-Setup-0.2.6.exe -Lang ru   # начать на русском
-.\AntigravityMesh-Setup-0.2.6.exe -SelfTest  # самопроверка без окна, печатает JSON
-.\AntigravityMesh-Setup-0.2.6.exe --version  # показать версию
+.\AntigravityMesh-Setup-0.3.0.exe            # открыть визуальный установщик
+.\AntigravityMesh-Setup-0.3.0.exe -Lang ru   # начать на русском
+.\AntigravityMesh-Setup-0.3.0.exe -SelfTest  # самопроверка без окна, печатает JSON
+.\AntigravityMesh-Setup-0.3.0.exe --version  # показать версию
 ```
 
 Внутри него лежат мастер, `install.ps1`, `core/` и `install.sh`; он распаковывает их в
@@ -606,6 +662,45 @@ PowerShell, которые в Windows уже есть, а собирается �
 ```
 
 Он поднимает локальный FastMCP-сервер на `http://localhost:8096/sse` и кладёт эту ссылку в буфер обмена.
+
+---
+
+## 🔄 Автоматические обновления
+
+Узел устанавливается из релиза на GitHub и дальше поддерживает себя в актуальном
+состоянии сам. Ничего не нужно переустанавливать руками, и ничего
+непроверенного не устанавливается.
+
+- **Узел проверяет сам.** Работающий агент раз в 6 часов
+  (`MESH_UPDATE_CHECK_INTERVAL`) спрашивает GitHub Releases API, сравнивает тег с
+  версией в `core/version.py` и ставит найденное. На Windows то же самое раз в
+  сутки делает задача `AntigravityMeshUpdater` — даже если агент не запущен.
+  `MESH_UPDATE_AUTO=0` отключает установку, оставляя только уведомления.
+- **Сначала проверка, потом установка.** Payload скачивается, его SHA-256
+  сравнивается с опубликованной контрольной суммой, и только затем заменяются
+  `core/`, `skills/` и `ops/`. Нет суммы — нет обновления.
+- **Откат возможен всегда.** Заменённые каталоги сохраняются в
+  `%USERPROFILE%\.config\antigravity-mesh\backups\<версия>-<время>\`, а
+  обновление, прерванное убийством процесса или отключением питания,
+  откатывается автоматически при следующем запуске.
+- **Узел возвращается уже новым.** Агент перезапускается тем, что за ним
+  присматривает (задача-сторож на Windows, `systemctl --user restart agy-agent.service`,
+  `launchctl kickstart -k`), а если надзора нет — запускается напрямую.
+
+Вручную, в любой момент:
+
+```powershell
+gemini-computer-use update -Check      # вышел ли новый релиз?
+gemini-computer-use update             # установить сейчас и перезапустить
+gemini-computer-use update -Check -Json
+```
+
+Из Gemini: попросите узел выполнить `mesh_update` (`status`, затем `check`, затем
+`apply`).
+
+Результат последней проверки попадает в heartbeat, поэтому его показывает
+`ops\doctor.ps1`, а полная история — в `%USERPROFILE%\.config\antigravity-mesh\update.log`.
+Настройки, коды выхода, откат и диагностика: [docs/UPDATES.md](docs/UPDATES.md).
 
 ---
 

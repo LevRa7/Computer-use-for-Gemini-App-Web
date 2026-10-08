@@ -60,6 +60,23 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
 }
 Write-Step ("version      : " + $version)
 
+# --- 1b. the Python node must declare the same version ------------------------
+# The node's updater compares the GitHub release tag with core/version.py, while
+# this build names the executable after package.json. If the two disagreed, the
+# release would advertise a version the node then refuses to install - silently,
+# as "already up to date".
+$versionModule = Join-Path $repo 'core\version.py'
+if (-not (Test-Path -LiteralPath $versionModule)) {
+    throw ("core/version.py not found: " + $versionModule)
+}
+$match = Select-String -LiteralPath $versionModule -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+if (-not $match) { throw ('core/version.py does not declare __version__ = "x.y.z"') }
+$moduleVersion = $match.Matches[0].Groups[1].Value
+if ($moduleVersion -ne $version) {
+    throw ('version mismatch: package.json says ' + $version + ' but core/version.py says ' + $moduleVersion)
+}
+Write-Step ("node version : " + $moduleVersion)
+
 # --- 2. the in-box compiler ---------------------------------------------------
 $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) {

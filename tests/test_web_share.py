@@ -29,7 +29,9 @@ NODE = "test-node"
 #: The four tools the gateway advertises; they must be the last four in TOOLS.
 SHARE_TOOLS = ("share_file", "serve_dir", "share_list", "unshare")
 
-#: The tool surface that existed before shares were added, in order.
+#: The tool surface that existed before shares were added, in order. Self-update
+#: (mesh_update) was added in the same slot: before the share tools, after the
+#: surface that existed when shares landed.
 PRE_EXISTING_TOOLS = (
     "mesh_status",
     "system_info",
@@ -46,6 +48,7 @@ PRE_EXISTING_TOOLS = (
     "job_output",
     "job_kill",
     "job_list",
+    "mesh_update",
 )
 
 
@@ -107,7 +110,7 @@ def test_the_share_tools_are_the_last_four_and_do_not_disturb_the_rest():
     names = [tool["name"] for tool in mcp_tools.TOOLS]
     assert names[:len(PRE_EXISTING_TOOLS)] == list(PRE_EXISTING_TOOLS)
     assert tuple(names[len(PRE_EXISTING_TOOLS):]) == SHARE_TOOLS
-    assert len(names) == 19, "the node must advertise 15 old tools plus 4 share tools"
+    assert len(names) == 20, "the node must advertise 16 core tools plus 4 share tools"
 
 
 def test_every_share_tool_has_a_handler_and_a_schema():

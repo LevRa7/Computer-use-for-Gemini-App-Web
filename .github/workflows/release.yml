@@ -1,0 +1,180 @@
+# Publish a release - and everything a node needs to update itself from it.
+#
+# Pushing a tag like v0.3.0 is the whole procedure:
+#
+#   1. the tag, core/version.py and package.json must agree, and the updater and
+#      version tests must pass;
+#   2. the Windows single-file setup is built and self-tested;
+#   3. the updatable payload archive is built with its SHA-256;
+#   4. all four assets are attached to the release.
+#
+# A node running an older version then finds the release through the GitHub API,
+# downloads mesh-payload-<version>.zip, verifies the published checksum, installs
+# it and restarts. Nothing has to be done by hand, and nothing is installed that
+# does not match a published hash.
+#
+# The release notes come from docs/releases/<tag>.md when that file exists;
+# otherwise GitHub generates them from the commits.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (for example v0.3.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: tag and versions agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: The tag must name the version the code declares
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import json, os, re, sys
+          sys.path.insert(0, os.getcwd())
+          from core import version
+
+          tag = os.environ["TAG"]
+          module = version.__version__
+          with open("package.json", encoding="utf-8") as handle:
+              package = json.load(handle)["version"]
+          match = re.fullmatch(r"v?(.+)", tag)
+          tagged = match.group(1) if match else tag
+          problems = []
+          if tagged != module:
+              problems.append("tag %s != core/version.py %s" % (tag, module))
+          if package != module:
+              problems.append("package.json %s != core/version.py %s" % (package, module))
+          if not re.fullmatch(version.VERSION_PATTERN, module):
+              problems.append("core/version.py %r is not MAJOR.MINOR.PATCH" % module)
+          if problems:
+              print("\n".join(problems))
+              sys.exit(1)
+          print("version ok:", module)
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio websockets starlette
+
+      - name: Updater and version gate
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest -q -p no:cacheprovider tests/test_updater.py tests/test_version_single_source.py
+
+      - name: Build the payload archive
+        run: python tools/build-payload-zip.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesh-payload
+          path: dist/mesh-payload-*
+          if-no-files-found: error
+
+  windows:
+    name: Windows setup executable
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the single-file setup
+        shell: pwsh
+        run: ./build-installer-exe.ps1
+
+      - name: Self-test the executable
+        shell: pwsh
+        run: |
+          $exe = @(Get-ChildItem dist/AntigravityMesh-Setup-*.exe | Select-Object -First 1)
+          if ($exe.Count -eq 0) { throw "the build produced no executable" }
+          Write-Host "version: $(& $exe[0].FullName --version)"
+          & $exe[0].FullName --unpack
+          if ($LASTEXITCODE -ne 0) { throw "the payload did not unpack" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup-exe
+          path: dist/AntigravityMesh-Setup-*
+          if-no-files-found: error
+
+  release:
+    name: publish the release
+    needs: [verify, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List the assets that will be published
+        run: ls -l dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="$TAG"
+          notes="docs/releases/${tag}.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; adding assets"
+            if [ -f "$notes" ]; then
+              gh release edit "$tag" --notes-file "$notes"
+            fi
+          elif [ -f "$notes" ]; then
+            gh release create "$tag" --title "Antigravity Mesh $tag" --notes-file "$notes"
+          else
+            gh release create "$tag" --title "Antigravity Mesh $tag" --generate-notes
+          fi
+
+      - name: Attach the assets (node updater reads these)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release upload "$TAG" \
+            dist/AntigravityMesh-Setup-*.exe \
+            dist/AntigravityMesh-Setup-*.exe.sha256 \
+            dist/mesh-payload-*.zip \
+            dist/mesh-payload-*.zip.sha256 \
+            --clobber
+
+      - name: Verify what a node will see
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets

@@ -7,14 +7,15 @@ const path = require('path');
 const isWindows = os.platform() === 'win32';
 const argv = process.argv.slice(2);
 
-// The two local maintenance subcommands run scripts that ship next to this CLI:
+// The local maintenance subcommands run scripts that ship next to this CLI:
 // in the installer payload, or in a repository checkout. Only the FIRST argument
 // is inspected, so every other invocation - including the argument-passing
 // bootstrap "-Quick", "-User <name>", "-Gateway <domain>" - is forwarded to the
 // published installer exactly as before.
 const LOCAL_SCRIPTS = {
   doctor: path.join('ops', 'doctor.ps1'),
-  restart: path.join('ops', 'windows', 'agent-watchdog.ps1')
+  restart: path.join('ops', 'windows', 'agent-watchdog.ps1'),
+  update: path.join('ops', 'update.ps1')
 };
 
 // Printed for "-h"/"-help"/"--help": the scripts declare their own parameter
@@ -30,6 +31,15 @@ const LOCAL_USAGE = {
     'usage: gemini-computer-use restart [-Quiet] [-ConfigDir <path>] [-LogFile <path>] [-GraceSeconds <n>]',
     '  runs the watchdog once and starts the agent when the node is offline',
     '  exit code 0 when the node is online, 2 when the node is misconfigured, 3 when it is still offline'
+  ].join('\n'),
+  update: [
+    'usage: gemini-computer-use update [-Check] [-Force] [-Offline] [-NoRestart] [-Json]',
+    '                                [-InstallDir <path>] [-Python <path>] [-ConfigDir <path>]',
+    '  self-update from the newest GitHub release: -Check only reports what the',
+    '  newest published version is, without -Check the payload is downloaded, its',
+    '  SHA-256 verified and installed with a rollback backup, then the node restarts',
+    '  exit code 0 up to date or applied, 2 update available (-Check), 3 failed,',
+    '            4 applied and the node is restarting'
   ].join('\n')
 };
 

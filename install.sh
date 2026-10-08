@@ -328,7 +328,7 @@ fi
 if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
     mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
-    for f in core/agent.py core/server.py core/mcp_tools.py core/web_share.py core/domain.py core/vitals.py core/__init__.py skills/orchestrator.md; do
+    for f in core/agent.py core/server.py core/mcp_tools.py core/web_share.py core/domain.py core/vitals.py core/updater.py core/version.py core/__init__.py skills/orchestrator.md; do
         bootstrap_tmp="$BOOTSTRAP_DIR/${f}.part"
         if curl -fsSL "https://${GATEWAY}/${f}" -o "$bootstrap_tmp" 2>/dev/null \
             || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/${f}" -o "$bootstrap_tmp" 2>/dev/null; then
