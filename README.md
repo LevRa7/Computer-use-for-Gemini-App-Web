@@ -22,7 +22,7 @@ Gemini in a browser or on a phone can talk, but it cannot *do* anything on your 
  рџ“± Gemini app / рџЊђ gemini.google.com (Spark)
               в”‚  MCP (SSE / Streamable HTTP)
               в–ј
-     вЃпёЏ  Gateway  smart-server.online   в†ђ relay only, TLS
+     вЃпёЏ  Gateway  racknerd-5a24bf9.merino-carob.ts.net   в†ђ relay only, TLS
               в”‚  outbound WebSocket tunnel (no open ports)
               в–ј
    рџ’» Your PC В· laptop В· VPS В· home server  в†’  executes the task
@@ -211,19 +211,19 @@ These four make something on your machine readable from the internet. The link i
 
 **рџђ§ Linux / рџЌЋ macOS**
 ```bash
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 **рџ“± Android (Termux)** вЂ” no root, works from F-Droid's Termux
 ```bash
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 Autostart on a phone is a runit service plus the Termux:Boot app, and the node is
 named after the device model вЂ” see [docs/TERMUX.md](docs/TERMUX.md).
 
 **рџЄџ Windows (PowerShell)**
 ```powershell
-irm https://smart-server.online/install.ps1 | iex
+irm https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1 | iex
 ```
 
 **рџЄџ Windows вЂ” visual installer** (from a clone or a release)
@@ -249,7 +249,7 @@ cd Computer-use-for-Gemini-App-Web
 
 At the end the installer prints your personal MCP link and copies it to the clipboard:
 ```text
-https://smart-server.online/sse?user=<your-node-name>&token=<your_secret_token>
+https://racknerd-5a24bf9.merino-carob.ts.net/sse?user=<your-node-name>&token=<your_secret_token>
 ```
 
 ### 2. Connect it to Gemini Spark
@@ -286,7 +286,7 @@ Windows already ships PowerShell 5.1, so there is nothing to prepare вЂ” no 
 
 |  | Console installer | Visual installer |
 | :--- | :--- | :--- |
-| Start | `irm https://smart-server.online/install.ps1 \| iex` | `.\install-gui.cmd` |
+| Start | `irm https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1 \| iex` | `.\install-gui.cmd` |
 | Needs | nothing but PowerShell | a clone or an unpacked release вЂ” it drives `install.ps1`, `core/` and `install.sh` |
 | Variants | `-Mode tunnel` (default), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Quick setup, Custom setup, Remote over SSH |
 | Language | `-Lang en` / `-Lang ru` | switch in the window header, or `-Lang` |
@@ -402,7 +402,7 @@ then shows up in Gemini Spark like any other machine. Full guide:
 # 1. Termux from F-Droid (not Google Play); optionally Termux:Boot and Termux:API
 pkg update -y
 # 2. the usual one-liner
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 What a phone changes, and how the installer handles it:
@@ -572,7 +572,7 @@ Gemini РІ Р±СЂР°СѓР·РµСЂРµ РёР»Рё РЅР° С‚РµР»
  рџ“± РџСЂРёР»РѕР¶РµРЅРёРµ Gemini / рџЊђ gemini.google.com (Spark)
               в”‚  MCP (SSE / Streamable HTTP)
               в–ј
-     вЃпёЏ  РЁР»СЋР·  smart-server.online   в†ђ С‚РѕР»СЊРєРѕ СЂРµР»РµР№, TLS
+     вЃпёЏ  РЁР»СЋР·  racknerd-5a24bf9.merino-carob.ts.net   в†ђ С‚РѕР»СЊРєРѕ СЂРµР»РµР№, TLS
               в”‚  РёСЃС…РѕРґСЏС‰РёР№ WebSocket-С‚СѓРЅРЅРµР»СЊ (Р±РµР· РѕС‚РєСЂС‹С‚С‹С… РїРѕСЂС‚РѕРІ)
               в–ј
    рџ’» Р’Р°С€ РџРљ В· РЅРѕСѓС‚Р±СѓРє В· VPS В· РґРѕРјР°С€РЅРёР№ СЃРµСЂРІРµСЂ  в†’  РІС‹РїРѕР»РЅСЏРµС‚ Р·Р°РґР°С‡Сѓ
@@ -761,19 +761,19 @@ Gemini Spark СЂРµС€Р°РµС‚, РѕСЃС‚Р°РЅР°РІР»РёР
 
 **рџђ§ Linux / рџЌЋ macOS**
 ```bash
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 **рџ“± Android (Termux)** вЂ” Р±РµР· root, Termux РёР· F-Droid
 ```bash
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 РђРІС‚РѕР·Р°РїСѓСЃРє РЅР° С‚РµР»РµС„РѕРЅРµ вЂ” СЃР»СѓР¶Р±Р° runit РїР»СЋСЃ РїСЂРёР»РѕР¶РµРЅРёРµ Termux:Boot, Р° РёРјСЏ СѓР·Р»Р°
 Р±РµСЂС‘С‚СЃСЏ РёР· РјРѕРґРµР»Рё СѓСЃС‚СЂРѕР№СЃС‚РІР°: СЃРј. [docs/TERMUX.md](docs/TERMUX.md).
 
 **рџЄџ Windows (PowerShell)**
 ```powershell
-irm https://smart-server.online/install.ps1 | iex
+irm https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1 | iex
 ```
 
 **рџЄџ Windows вЂ” РІРёР·СѓР°Р»СЊРЅС‹Р№ СѓСЃС‚Р°РЅРѕРІС‰РёРє** (РёР· РєР»РѕРЅР° РёР»Рё СЂРµР»РёР·Р°)
@@ -799,7 +799,7 @@ cd Computer-use-for-Gemini-App-Web
 
 Р’ РєРѕРЅС†Рµ СѓСЃС‚Р°РЅРѕРІС‰РёРє РІС‹РІРµРґРµС‚ РІР°С€Сѓ Р»РёС‡РЅСѓСЋ MCP-СЃСЃС‹Р»РєСѓ Рё СЃРєРѕРїРёСЂСѓРµС‚ РµС‘ РІ Р±СѓС„РµСЂ РѕР±РјРµРЅР°:
 ```text
-https://smart-server.online/sse?user=<РёРјСЏ-РІР°С€РµРіРѕ-СѓР·Р»Р°>&token=<РІР°С€_СЃРµРєСЂРµС‚РЅС‹Р№_С‚РѕРєРµРЅ>
+https://racknerd-5a24bf9.merino-carob.ts.net/sse?user=<РёРјСЏ-РІР°С€РµРіРѕ-СѓР·Р»Р°>&token=<РІР°С€_СЃРµРєСЂРµС‚РЅС‹Р№_С‚РѕРєРµРЅ>
 ```
 
 ### 2. РџРѕРґРєР»СЋС‡РёС‚Рµ РµС‘ Рє Gemini Spark
@@ -836,7 +836,7 @@ https://smart-server.online/sse?user=<РёРјСЏ-РІР°С€РµРіРѕ-С�
 
 |  | РљРѕРЅСЃРѕР»СЊРЅС‹Р№ СѓСЃС‚Р°РЅРѕРІС‰РёРє | Р’РёР·СѓР°Р»СЊРЅС‹Р№ СѓСЃС‚Р°РЅРѕРІС‰РёРє |
 | :--- | :--- | :--- |
-| Р—Р°РїСѓСЃРє | `irm https://smart-server.online/install.ps1 \| iex` | `.\install-gui.cmd` |
+| Р—Р°РїСѓСЃРє | `irm https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1 \| iex` | `.\install-gui.cmd` |
 | Р§С‚Рѕ РЅСѓР¶РЅРѕ | С‚РѕР»СЊРєРѕ PowerShell | РєР»РѕРЅ РёР»Рё СЂР°СЃРїР°РєРѕРІР°РЅРЅС‹Р№ СЂРµР»РёР· вЂ” РѕРЅ РІС‹Р·С‹РІР°РµС‚ `install.ps1`, `core/` Рё `install.sh` |
 | Р’Р°СЂРёР°РЅС‚С‹ | `-Mode tunnel` (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Р‘С‹СЃС‚СЂР°СЏ РЅР°СЃС‚СЂРѕР№РєР°, РљР°СЃС‚РѕРјРЅР°СЏ РЅР°СЃС‚СЂРѕР№РєР°, РЈРґР°Р»С‘РЅРЅРѕ РїРѕ SSH |
 | РЇР·С‹Рє | `-Lang en` / `-Lang ru` | РїРµСЂРµРєР»СЋС‡Р°С‚РµР»СЊ РІ С€Р°РїРєРµ РѕРєРЅР° РёР»Рё `-Lang` |
@@ -951,7 +951,7 @@ PowerShell, РєРѕС‚РѕСЂС‹Рµ РІ Windows СѓР¶Рµ РµСЃС�
 # 1. Termux РёР· F-Droid (РЅРµ РёР· Google Play); РїРѕ Р¶РµР»Р°РЅРёСЋ Termux:Boot Рё Termux:API
 pkg update -y
 # 2. РѕР±С‹С‡РЅР°СЏ РѕРґРЅРѕСЃС‚СЂРѕС‡РЅР°СЏ СѓСЃС‚Р°РЅРѕРІРєР°
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 Р§С‚Рѕ РјРµРЅСЏРµС‚СЃСЏ РЅР° С‚РµР»РµС„РѕРЅРµ Рё РєР°Рє СЌС‚Рѕ СЂРµС€Р°РµС‚ СѓСЃС‚Р°РЅРѕРІС‰РёРє:

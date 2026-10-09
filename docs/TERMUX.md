@@ -43,7 +43,7 @@ Then, in Termux:
 
 ```bash
 pkg update -y
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 The installer detects Termux (it does not mistake it for a small Linux) and adapts
@@ -61,7 +61,7 @@ Optional overrides:
 
 ```bash
 # choose the node name yourself (letters, digits, - and _ only)
-curl -fsSL https://smart-server.online/install.sh | bash -s -- --user=my-phone
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash -s -- --user=my-phone
 
 # self-hosted gateway
 MESH_PUBLIC_URL=https://mesh.example.com bash install.sh --quick
@@ -396,7 +396,7 @@ Root **не нужен**: Termux — обычное приложение Android
 
 ```bash
 pkg update -y
-curl -fsSL https://smart-server.online/install.sh | bash
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash
 ```
 
 Что установщик делает иначе на Android:
@@ -412,7 +412,7 @@ curl -fsSL https://smart-server.online/install.sh | bash
 Своё имя узла или свой шлюз:
 
 ```bash
-curl -fsSL https://smart-server.online/install.sh | bash -s -- --user=my-phone
+curl -fsSL https://racknerd-5a24bf9.merino-carob.ts.net/install.sh | bash -s -- --user=my-phone
 MESH_PUBLIC_URL=https://mesh.example.com bash install.sh --quick
 ```
 
