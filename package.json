@@ -1,13 +1,14 @@
 {
   "name": "gemini-computer-use",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Turn your PC, Laptop, Server or Android phone into an autonomous execution node for Google Gemini via native MCP: 26 tools, write/edit/search, background jobs, public file and page sharing, secure reverse tunnel, self-update, and a device branch (battery, signal, sensors, camera, microphone, notifications) for phones and laptops.",
   "main": "bin/cli.js",
   "bin": {
     "gemini-computer-use": "bin/cli.js"
   },
   "scripts": {
-    "start": "node ./bin/cli.js"
+    "start": "node ./bin/cli.js",
+    "prepack": "node -e \"const fs=require('fs'),path=require('path');const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){if(e.name==='.git'||e.name==='node_modules'||e.name==='venv')continue;const p=path.join(d,e.name);if(e.isDirectory()){if(e.name==='__pycache__')fs.rmSync(p,{recursive:true,force:true});else walk(p);}else if(/\\.(pyc|pyo)$/.test(e.name))fs.rmSync(p,{force:true});}};walk('.');\""
   },
   "files": [
     "bin",
