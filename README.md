@@ -72,11 +72,12 @@ Gemini Spark decides whether to stop and ask *"confirm this action?"* from the *
 | Class | Tools | Confirmation |
 | :--- | :--- | :--- |
 | Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `device_info` | never asked |
-| Local work — commands, builds, file writes, jobs, shares, device actions | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `device_control` | not asked |
-| **Sensitive — observes the physical world or a person's private data** | `device_capture` (camera, microphone, location, fingerprint, USB, infrared), `device_messages` (SMS, call log, contacts, calls) | **asked first** |
-| **Confirmed — install/delete, `sudo`, system paths** | `system_change` (installs/removes software, deletes data, runs `sudo`, edits system paths by shell), `system_write` (writes file content into a system path), `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
+| Local work — commands, builds, file writes, jobs, shares, and the whole device branch | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `unshare`, `device_control`, `device_capture`, `device_messages` | not asked |
+| **Confirmed — install/delete, `sudo`, system paths** | `system_change` (installs/removes software, deletes data, runs `sudo`, edits system paths by shell), `system_write` (writes file content into a system path), `mesh_update` (installs a release) | **asked first** |
 
-`device_capture` and `device_messages` delete nothing, yet they are advertised with `destructiveHint`. That hint is the only one clients such as Gemini Spark reliably turn into a *"confirm this action?"* prompt, and a camera, a microphone or an SMS list that fires silently is worse than an honest over-classification. They were put in that class deliberately. `device_control` stays ordinary local work for the same reason: marking a torch or a vibrate as destructive would only train you to click through the prompts that matter.
+A prompt is spent on a **system change** only: `system_change`, `system_write` and `mesh_update` install, remove, delete or replace something you cannot undo in one call. Everything else runs silently, the device branch included — a camera, a microphone or an SMS list installs and removes nothing, and what still refuses such a call is the node's own switch (`MESH_DEVICE`, `MESH_DEVICE_ACTIONS`, `MESH_DEVICE_PIM`, `MESH_READ_ONLY`), which holds no matter what the client does. `unshare` is ordinary local work for the same reason: it stops a local server and removes a copy you can publish again in one call.
+
+The mechanics matter if you also run the node in standalone mode: Gemini Spark skips its dialog only for a tool it sees as `readOnlyHint: true`, so the gateway advertises **every** non-system call that way — the shell and file twins because its classifier refuses the gated command classes, the device branch because the node refuses the call before any `termux-*` command runs. The node's own `tools/list` keeps the literal hint instead (a camera is not a read), which is why a client connected straight to `core/server.py` may still ask.
 
 Four classes are gated, and the gateway — not the hint — enforces them, because a hint is static per tool and cannot tell `ls` from `apt install`:
 
@@ -141,8 +142,8 @@ These four tools read and act on the device the node itself runs on. They are ad
 | :--- | :--- |
 | `device_info(section, sensor, fresh, quick)` | One-call device report: battery and charging, network interfaces with Wi-Fi and cellular signal, language, time and timezone, CPU, RAM, storage, cameras, microphones, sensors and what the platform can actually reach. `section` is `summary`, `all` (default) or one of `device`, `battery`, `network`, `locale`, `time`, `hardware`, `storage`, `cameras`, `microphones`, `sensors`, `capabilities`. `sensor` takes one live sample from a named sensor (Android; the name comes from the `sensors` block), `fresh` bypasses the few-second cache and `quick` skips the slow sections. Every block carries `available` and `source`; a block the platform cannot answer says why instead of showing a zero. |
 | `device_control(action, on, value, stream, text, title, id, url, path, state, timeout_sec)` | Twenty reversible actions: `torch`, `vibrate`, `volume`, `volume_get`, `brightness`, `tts_speak`, `toast`, `notify`, `notify_list`, `notify_remove`, `clipboard_get`, `clipboard_set`, `media`, `media_scan`, `wakelock`, `download`, `open`, `share`, `dialog`, `wallpaper`. `value` is milliseconds for `vibrate`, a 0–15 level for `volume` and 0–255 for `brightness`; `stream` picks the audio stream (`music` by default); `text` is the body for TTS, toast, notification, clipboard and dialog, and `play\|pause\|stop\|info` for `media`. Nothing here is destructive. |
-| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Eleven actions: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **Asks first.** `path` is the output file for `camera_photo` and `mic_record_start` (default: the node's capture directory) and the device path from `usb_list` for `usb_access`; `camera_id` comes from `camera_list`, `seconds` limits a recording, `provider` is `gps`, `network` or `passive`, and `frequency`/`pattern` drive `infrared_transmit`. A photo or a recording stays in the capture directory and is never uploaded by itself — `share_file` publishes it only when you ask for that. `fingerprint` returns only the verdict; `usb_access` asks Android for permission and returns the descriptor but deliberately refuses to run a program for you. |
-| `device_messages(action, number, text, limit, offset, type, query)` | Five actions: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **Asks first, and is off until the operator enables it with `MESH_DEVICE_PIM=1`** — it is the private data of whoever holds the phone. `limit` is 1–50 (default 10), `offset` pages through the list, `type` filters it and `query` filters contacts on the node. |
+| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Eleven actions: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **No confirmation prompt** — it installs and removes nothing, and `MESH_DEVICE`/`MESH_DEVICE_ACTIONS`/`MESH_READ_ONLY` on the node are what refuse a call. `path` is the output file for `camera_photo` and `mic_record_start` (default: the node's capture directory) and the device path from `usb_list` for `usb_access`; `camera_id` comes from `camera_list`, `seconds` limits a recording, `provider` is `gps`, `network` or `passive`, and `frequency`/`pattern` drive `infrared_transmit`. A photo or a recording stays in the capture directory and is never uploaded by itself — `share_file` publishes it only when you ask for that. `fingerprint` returns only the verdict; `usb_access` asks Android for permission and returns the descriptor but deliberately refuses to run a program for you. |
+| `device_messages(action, number, text, limit, offset, type, query)` | Five actions: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **No confirmation prompt, and off until the operator enables it with `MESH_DEVICE_PIM=1`** — it is the private data of whoever holds the phone, so the node itself is the gate. `limit` is 1–50 (default 10), `offset` pages through the list, `type` filters it and `query` filters contacts on the node. |
 
 Example:
 
@@ -154,7 +155,7 @@ Example:
   → device_control(action="torch", on=true)
 
 "Take a photo and share it with me."
-  → device_capture(action="camera_photo")   # asks for confirmation
+  → device_capture(action="camera_photo")   # runs without a dialog
   → share_file(path=<the path it returned>)
 ```
 
@@ -333,10 +334,10 @@ The release also ships a single compiled installer, for machines where you would
 not clone or download anything else — `AntigravityMesh-Setup-<version>.exe`:
 
 ```powershell
-.\AntigravityMesh-Setup-0.4.3.exe            # open the visual installer
-.\AntigravityMesh-Setup-0.4.3.exe -Lang ru   # start in Russian
-.\AntigravityMesh-Setup-0.4.3.exe -SelfTest  # headless self-check, prints JSON
-.\AntigravityMesh-Setup-0.4.3.exe --version  # print the version
+.\AntigravityMesh-Setup-0.4.4.exe            # open the visual installer
+.\AntigravityMesh-Setup-0.4.4.exe -Lang ru   # start in Russian
+.\AntigravityMesh-Setup-0.4.4.exe -SelfTest  # headless self-check, prints JSON
+.\AntigravityMesh-Setup-0.4.4.exe --version  # print the version
 ```
 
 It carries the wizard, `install.ps1`, `core/` and `install.sh` inside itself, unpacks them
@@ -622,11 +623,12 @@ Gemini Spark решает, останавливаться ли с вопросо
 | Класс | Инструменты | Подтверждение |
 | :--- | :--- | :--- |
 | Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `device_info` | не запрашивается |
-| Локальная работа — команды, сборки, запись файлов, задачи, публикации, действия с устройством | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `device_control` | не запрашивается |
-| **Чувствительные — наблюдают за физическим миром или личными данными** | `device_capture` (камера, микрофон, местоположение, отпечаток, USB, ИК-порт), `device_messages` (SMS, журнал вызовов, контакты, звонки) | **запрашивается** |
-| **Подтверждаемые — установка/удаление, `sudo`, системные пути** | `system_change` (установка/удаление ПО, удаление данных, `sudo`, правка системных путей через оболочку), `system_write` (запись файла в системный путь), `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
+| Локальная работа — команды, сборки, запись файлов, задачи, публикации и вся ветка устройства | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `unshare`, `device_control`, `device_capture`, `device_messages` | не запрашивается |
+| **Подтверждаемые — установка/удаление, `sudo`, системные пути** | `system_change` (установка/удаление ПО, удаление данных, `sudo`, правка системных путей через оболочку), `system_write` (запись файла в системный путь), `mesh_update` (устанавливает релиз) | **запрашивается** |
 
-`device_capture` и `device_messages` ничего не удаляют, но объявлены с `destructiveHint`. Эта подсказка — единственная, которую клиенты вроде Gemini Spark надёжно превращают в вопрос *«подтвердить действие?»*, а молча сработавшая камера, микрофон или список SMS хуже честной перестраховки. В этот класс они отнесены намеренно. `device_control` по той же причине остаётся обычной локальной работой: пометить так фонарик или вибрацию — значит приучить вас закрывать те диалоги, которые действительно важны.
+Подтверждение тратится только на **системное изменение**: `system_change`, `system_write` и `mesh_update` устанавливают, удаляют, стирают или заменяют то, что нельзя отменить одним вызовом. Всё остальное идёт молча, включая ветку устройства: камера, микрофон или список SMS ничего не устанавливают и не удаляют, а отказывает такому вызову собственный переключатель узла (`MESH_DEVICE`, `MESH_DEVICE_ACTIONS`, `MESH_DEVICE_PIM`, `MESH_READ_ONLY`), который действует независимо от клиента. `unshare` — тоже обычная локальная работа: он останавливает локальный сервер и удаляет копию, которую можно опубликовать снова одним вызовом.
+
+Механика важна, если вы запускаете узел ещё и в standalone-режиме: Gemini Spark пропускает диалог только для инструмента с `readOnlyHint: true`, поэтому шлюз объявляет так **каждый** не-системный вызов — «двойники» оболочки и записи потому, что их закрытые классы команд отклоняет классификатор, а ветку устройства потому, что узел отказывает вызову до запуска любой команды `termux-*`. Собственный `tools/list` узла остаётся буквальным (камера — не чтение), поэтому клиент, подключённый напрямую к `core/server.py`, всё ещё может спросить.
 
 Под барьером четыре класса, и следит за ними шлюз, а не подсказка: подсказка статична на инструмент и не отличает `ls` от `apt install`.
 
@@ -691,8 +693,8 @@ Gemini Spark решает, останавливаться ли с вопросо
 | :--- | :--- |
 | `device_info(section, sensor, fresh, quick)` | Отчёт об устройстве одним вызовом: батарея и зарядка, сетевые интерфейсы с уровнем Wi-Fi и сотового сигнала, язык, время и часовой пояс, CPU, ОЗУ, накопитель, камеры, микрофоны, датчики и то, до чего платформа реально дотягивается. `section` — `summary`, `all` (по умолчанию) или один из `device`, `battery`, `network`, `locale`, `time`, `hardware`, `storage`, `cameras`, `microphones`, `sensors`, `capabilities`. `sensor` берёт один живой замер с датчика по имени (Android; имя — из блока `sensors`), `fresh` обходит короткий кэш, `quick` пропускает медленные разделы. У каждого блока есть `available` и `source`; блок, на который у платформы нет ответа, говорит причину, а не показывает ноль. |
 | `device_control(action, on, value, stream, text, title, id, url, path, state, timeout_sec)` | Двадцать обратимых действий: `torch`, `vibrate`, `volume`, `volume_get`, `brightness`, `tts_speak`, `toast`, `notify`, `notify_list`, `notify_remove`, `clipboard_get`, `clipboard_set`, `media`, `media_scan`, `wakelock`, `download`, `open`, `share`, `dialog`, `wallpaper`. `value` — миллисекунды для `vibrate`, уровень 0–15 для `volume` и 0–255 для `brightness`; `stream` выбирает аудиопоток (`music` по умолчанию); `text` — тело для TTS, toast, уведомления, буфера обмена и диалога, а для `media` — `play\|pause\|stop\|info`. Ничего деструктивного здесь нет. |
-| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Одиннадцать действий: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **Спрашивает подтверждение.** `path` задаёт выходной файл для `camera_photo` и `mic_record_start` (по умолчанию — каталог съёмки узла) и путь устройства из `usb_list` для `usb_access`; `camera_id` берётся из `camera_list`, `seconds` ограничивает запись, `provider` — `gps`, `network` или `passive`, а `frequency`/`pattern` — для `infrared_transmit`. Фото и запись остаются в каталоге съёмки и сами никуда не отправляются — `share_file` публикует файл только по отдельной просьбе. `fingerprint` возвращает только вердикт; `usb_access` запрашивает у Android разрешение и отдаёт дескриптор, но намеренно отказывается запускать программу за вас. |
-| `device_messages(action, number, text, limit, offset, type, query)` | Пять действий: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **Спрашивает подтверждение и выключен, пока оператор не включит его через `MESH_DEVICE_PIM=1`** — это личные данные того, у кого телефон в руках. `limit` — 1–50 (по умолчанию 10), `offset` листает список, `type` фильтрует его, а `query` фильтрует контакты на узле. |
+| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Одиннадцать действий: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **Без запроса подтверждения** — инструмент ничего не устанавливает и не удаляет, а отказывают вызову переключатели узла `MESH_DEVICE`/`MESH_DEVICE_ACTIONS`/`MESH_READ_ONLY`. `path` задаёт выходной файл для `camera_photo` и `mic_record_start` (по умолчанию — каталог съёмки узла) и путь устройства из `usb_list` для `usb_access`; `camera_id` берётся из `camera_list`, `seconds` ограничивает запись, `provider` — `gps`, `network` или `passive`, а `frequency`/`pattern` — для `infrared_transmit`. Фото и запись остаются в каталоге съёмки и сами никуда не отправляются — `share_file` публикует файл только по отдельной просьбе. `fingerprint` возвращает только вердикт; `usb_access` запрашивает у Android разрешение и отдаёт дескриптор, но намеренно отказывается запускать программу за вас. |
+| `device_messages(action, number, text, limit, offset, type, query)` | Пять действий: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **Без запроса подтверждения, но выключен, пока оператор не включит его через `MESH_DEVICE_PIM=1`** — это личные данные того, у кого телефон в руках, поэтому барьер стоит на самом узле. `limit` — 1–50 (по умолчанию 10), `offset` листает список, `type` фильтрует его, а `query` фильтрует контакты на узле. |
 
 Пример:
 
@@ -704,7 +706,7 @@ Gemini Spark решает, останавливаться ли с вопросо
   → device_control(action="torch", on=true)
 
 «Сделай фото и поделись им со мной».
-  → device_capture(action="camera_photo")   # спрашивает подтверждение
+  → device_capture(action="camera_photo")   # без запроса подтверждения
   → share_file(path=<путь, который он вернул>)
 ```
 
@@ -882,10 +884,10 @@ https://racknerd-5a24bf9.merino-carob.ts.net/sse?user=<имя-вашего-уз�
 где не хочется ничего клонировать:
 
 ```powershell
-.\AntigravityMesh-Setup-0.4.3.exe            # открыть визуальный установщик
-.\AntigravityMesh-Setup-0.4.3.exe -Lang ru   # начать на русском
-.\AntigravityMesh-Setup-0.4.3.exe -SelfTest  # самопроверка без окна, печатает JSON
-.\AntigravityMesh-Setup-0.4.3.exe --version  # показать версию
+.\AntigravityMesh-Setup-0.4.4.exe            # открыть визуальный установщик
+.\AntigravityMesh-Setup-0.4.4.exe -Lang ru   # начать на русском
+.\AntigravityMesh-Setup-0.4.4.exe -SelfTest  # самопроверка без окна, печатает JSON
+.\AntigravityMesh-Setup-0.4.4.exe --version  # показать версию
 ```
 
 Внутри него лежат мастер, `install.ps1`, `core/` и `install.sh`; он распаковывает их в
