@@ -876,7 +876,16 @@ if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     require_gateway_dns || exit 1
     BOOTSTRAP_DIR="$HOME/.gemini-computer-use"
     mkdir -p "$BOOTSTRAP_DIR/core" "$BOOTSTRAP_DIR/skills"
-    for f in core/agent.py core/server.py core/mcp_tools.py core/web_share.py core/domain.py core/vitals.py core/updater.py core/version.py core/__init__.py skills/orchestrator.md; do
+    # EVERY module the node can import, not a hand-picked few: the list below used to
+    # stop at the files that existed when it was written, and a fresh phone install
+    # then answered "the device layer (core/device.py) is missing from this checkout"
+    # while the branch was advertised - the tool was there, its module was not.
+    # tests/test_installer_bootstrap.py fails when a core module is missing here.
+    for f in core/__init__.py core/agent.py core/agent_harness.py core/code_cache.py \
+             core/device.py core/domain.py core/hooks.py core/mcp_tools.py core/policies.py \
+             core/schemas.py core/server.py core/subagents.py core/termux.py core/triggers.py \
+             core/updater.py core/version.py core/vitals.py core/web_share.py \
+             skills/orchestrator.md; do
         bootstrap_tmp="$BOOTSTRAP_DIR/${f}.part"
         if curl -fsSL "https://${GATEWAY}/${f}" -o "$bootstrap_tmp" 2>/dev/null \
             || curl -fsSL "https://raw.githubusercontent.com/LevRa7/Computer-use-for-Gemini-App-Web/main/${f}" -o "$bootstrap_tmp" 2>/dev/null; then
