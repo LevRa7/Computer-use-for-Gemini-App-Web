@@ -17,8 +17,14 @@ Why not ``Compress-Archive`` / ``zip -r``:
   would run the OLD bytecode under the NEW file names. It is excluded here, and
   the updater clears any that still arrive.
 * **Reproducibility.** Entries are sorted and timestamps are fixed, so the same
-  tree always produces the same hash - which makes a published checksum mean
-  something across rebuilds.
+  tree on the same host family produces the same bytes - which makes a published
+  checksum mean something across rebuilds. Two measured caveats: a zip built on
+  Windows and one built on Linux differ in exactly one byte per entry, the "version
+  made by" host byte of each central-directory record (0 = MS-DOS, 3 = Unix), and a
+  checkout with ``core.autocrlf=true`` holds CRLF while the committed blobs hold LF,
+  so a Windows working tree is not the tree CI builds from. Entry contents and CRCs
+  are identical in the first case only. A node therefore always verifies the
+  checksum computed from the *published* archive (see docs/CI.md).
 
 Usage::
 
