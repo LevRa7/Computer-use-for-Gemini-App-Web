@@ -20,7 +20,7 @@ pre-release is older than the release it precedes, which is what
 """
 
 #: The node version. Keep it in sync with ``package.json`` (the build enforces it).
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 #: The repository that publishes the releases this node updates itself from.
 #: Declared here as well so a checkout says where it came from; ``package.json``

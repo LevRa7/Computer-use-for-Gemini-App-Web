@@ -333,10 +333,10 @@ The release also ships a single compiled installer, for machines where you would
 not clone or download anything else — `AntigravityMesh-Setup-<version>.exe`:
 
 ```powershell
-.\AntigravityMesh-Setup-0.4.2.exe            # open the visual installer
-.\AntigravityMesh-Setup-0.4.2.exe -Lang ru   # start in Russian
-.\AntigravityMesh-Setup-0.4.2.exe -SelfTest  # headless self-check, prints JSON
-.\AntigravityMesh-Setup-0.4.2.exe --version  # print the version
+.\AntigravityMesh-Setup-0.4.3.exe            # open the visual installer
+.\AntigravityMesh-Setup-0.4.3.exe -Lang ru   # start in Russian
+.\AntigravityMesh-Setup-0.4.3.exe -SelfTest  # headless self-check, prints JSON
+.\AntigravityMesh-Setup-0.4.3.exe --version  # print the version
 ```
 
 It carries the wizard, `install.ps1`, `core/` and `install.sh` inside itself, unpacks them
@@ -882,10 +882,10 @@ https://racknerd-5a24bf9.merino-carob.ts.net/sse?user=<имя-вашего-уз�
 где не хочется ничего клонировать:
 
 ```powershell
-.\AntigravityMesh-Setup-0.4.2.exe            # открыть визуальный установщик
-.\AntigravityMesh-Setup-0.4.2.exe -Lang ru   # начать на русском
-.\AntigravityMesh-Setup-0.4.2.exe -SelfTest  # самопроверка без окна, печатает JSON
-.\AntigravityMesh-Setup-0.4.2.exe --version  # показать версию
+.\AntigravityMesh-Setup-0.4.3.exe            # открыть визуальный установщик
+.\AntigravityMesh-Setup-0.4.3.exe -Lang ru   # начать на русском
+.\AntigravityMesh-Setup-0.4.3.exe -SelfTest  # самопроверка без окна, печатает JSON
+.\AntigravityMesh-Setup-0.4.3.exe --version  # показать версию
 ```
 
 Внутри него лежат мастер, `install.ps1`, `core/` и `install.sh`; он распаковывает их в
