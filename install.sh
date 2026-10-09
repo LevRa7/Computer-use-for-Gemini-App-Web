@@ -1197,12 +1197,18 @@ exec "$run_script"
 SV_EOF
         chmod 755 "$svdir/$name/run"
         # runit refuses to supervise without log/run, and svlogger is a script, not
-        # a program: the documented setup is a symlink to it. A $PREFIX that refuses
-        # symlinks (a FUSE-backed home, an unusual mount) gets an equivalent script
-        # instead, so the node is never left unsupervised for want of a link.
-        if ! ln -sf "$TERMUX_PREFIX/share/termux-services/svlogger" "$svdir/$name/log/run" 2>/dev/null; then
-            printf '#!%s/bin/sh\nexec "%s/share/termux-services/svlogger"\n' \
-                "$TERMUX_PREFIX" "$TERMUX_PREFIX" > "$svdir/$name/log/run"
+        # a program: the documented setup is a symlink to it. Two cases need the
+        # equivalent script instead, because a link that cannot resolve is worse
+        # than no link at all: a $PREFIX that refuses symlinks (a FUSE-backed home,
+        # an unusual mount), and a phone where sv and runsvdir exist but
+        # termux-services never installed its svlogger - 'ln -sf' happily creates a
+        # dangling log/run against a missing target, and runit then has a logger it
+        # cannot execute.
+        local svlogger="$TERMUX_PREFIX/share/termux-services/svlogger"
+        if [ ! -e "$svlogger" ] \
+            || ! ln -sf "$svlogger" "$svdir/$name/log/run" 2>/dev/null; then
+            printf '#!%s/bin/sh\nexec "%s"\n' \
+                "$TERMUX_PREFIX" "$svlogger" > "$svdir/$name/log/run"
             chmod 755 "$svdir/$name/log/run"
         fi
         export SVDIR="$svdir"
