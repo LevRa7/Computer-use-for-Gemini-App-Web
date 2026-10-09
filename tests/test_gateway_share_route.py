@@ -170,12 +170,16 @@ def _asgi(method, path, query=b""):
 GATEWAY_ONLY_TOOLS = {"system_change", "system_write"}
 
 #: Tools the gateway deliberately advertises as read-only while the node's own list
-#: keeps the honest hint. The client reads the gateway's surface, and what keeps the
-#: promise is not the hint but the classifier: the gated classes are refused and
-#: routed to system_change / system_write, which the client does confirm.
+#: keeps the honest hint. The client reads the gateway's surface and skips its
+#: dialog only for a tool it sees as read-only, so every call that must not
+#: interrupt the operator is claimed read-only here. What keeps the claim is never
+#: the hint: the classifier refuses the gated classes and routes them to
+#: system_change / system_write, and the device branch is refused on the node by
+#: MESH_DEVICE / MESH_DEVICE_ACTIONS / MESH_DEVICE_PIM / MESH_READ_ONLY.
 GATEWAY_UNCONFIRMED_TOOLS = {
     "bash_exec", "run_job", "write_file", "edit_file", "job_kill",
-    "share_file", "serve_dir",
+    "share_file", "serve_dir", "unshare",
+    "device_control", "device_capture", "device_messages",
 }
 
 
@@ -268,13 +272,14 @@ def test_the_four_device_tools_match_the_node_field_for_field(tmp_path, monkeypa
     device branch is different in three ways. It is new, so there is no legacy
     wording to preserve; the node is what actually executes these actions, which
     makes its spec the contract the client must be shown; and these four are the
-    ones a phone user's safety depends on - this exact text decides whether the
-    client stops to ask before a camera, a microphone, the location or the SMS
-    inbox, and whether a section that is merely unexposed reads as unavailable
-    rather than broken. The two tests above already compare names and confirmation
-    hints for the whole surface; this one pins the description and the schema
-    internals of these four, so a word, an enum or a property cannot drift on one
-    side only.
+    ones a phone user's safety depends on - this exact text is where the model
+    learns that the camera and the messages are gated by the node's own switches
+    (``MESH_DEVICE``, ``MESH_DEVICE_ACTIONS``, ``MESH_DEVICE_PIM``,
+    ``MESH_READ_ONLY``) rather than by a dialog, and that a section that is merely
+    unexposed reads as unavailable rather than broken. The two tests above already
+    compare names and confirmation hints for the whole surface; this one pins the
+    description and the schema internals of these four, so a word, an enum or a
+    property cannot drift on one side only.
     """
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(

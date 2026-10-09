@@ -477,7 +477,8 @@ class AntigravityMeshServer(object):
                                      "For the device this node runs on - battery, signal, "
                                      "time, sensors, cameras, microphones, notifications, "
                                      "torch, volume - use device_info / device_control; "
-                                     "device_capture and device_messages ask the user first."),
+                                     "device_capture and device_messages need no confirmation, "
+                                     "and the node's MESH_DEVICE switches decide what is allowed."),
                 },
             }
 
