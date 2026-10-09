@@ -32,7 +32,7 @@ import subprocess
 
 import pytest
 
-from core import device, mcp_tools, termux
+from core import device, mcp_tools, termux, vitals
 
 # ---------------------------------------------------------------------------
 # Documented termux-api payloads
@@ -471,3 +471,60 @@ def test_the_captured_telephony_payloads_drive_the_cellular_block(phone):
     assert cellular["level"] == serving["level"]
     assert cellular["cells_seen"] == len(cells)
     assert block["signal"].startswith(device_info["network_operator_name"])
+
+
+# ---------------------------------------------------------------------------
+# Two bugs the first real device report exposed
+# ---------------------------------------------------------------------------
+# The phone's own summary answered "cpu: 0" and "memory: 0.0/0.0 MB". Both are
+# pinned here against the facts that produced them, so neither can come back.
+
+#: What an Android 16 phone actually puts in /proc/cpuinfo: per-core entries only.
+#: No "Hardware", no "model name" - verified on the OPPO PHY110.
+ANDROID_CPUINFO = (
+    "processor\t: 0\n"
+    "BogoMIPS\t: 38.40\n"
+    "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32\n"
+    "CPU implementer\t: 0x41\n"
+    "processor\t: 1\n"
+    "BogoMIPS\t: 38.40\n"
+    "CPU implementer\t: 0x41\n"
+)
+
+
+def test_a_phone_cpu_model_is_never_a_core_index(phone, monkeypatch):
+    """`processor : 0` must not become the model, and props must supply the real one."""
+    monkeypatch.setattr(device, "_read_text",
+                        lambda path: ANDROID_CPUINFO if path == "/proc/cpuinfo" else "")
+    monkeypatch.setattr(device, "_android_getprop",
+                        lambda name: {"ro.soc.model": "SM8650-AB"}.get(name, ""))
+
+    block = device.collect(sections=["hardware"], fresh=True)["hardware"]
+    assert block["cpu"]["model"] == "SM8650-AB"
+    assert block["cpu"]["model"] != "0", \
+        "a core index is not a CPU model - the first phone report said 'cpu: 0'"
+
+
+def test_a_phone_cpu_model_falls_back_to_the_board_when_ro_soc_is_absent(phone, monkeypatch):
+    """Older Android builds answer ro.board.platform instead of ro.soc.model."""
+    monkeypatch.setattr(device, "_read_text",
+                        lambda path: ANDROID_CPUINFO if path == "/proc/cpuinfo" else "")
+    monkeypatch.setattr(device, "_android_getprop",
+                        lambda name: {"ro.board.platform": "kalama"}.get(name, ""))
+
+    block = device.collect(sections=["hardware"], fresh=True)["hardware"]
+    assert block["cpu"]["model"] == "kalama"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="reads the real /proc/meminfo")
+def test_vitals_treat_android_as_linux(monkeypatch):
+    """Python 3.13+ answers ``platform.system() == "Android"`` on a phone.
+
+    The collector knew only Linux/Darwin/Windows, so on Android it filled neither
+    branch and the phone reported 0 MB of RAM - which is what the first device report
+    showed, next to a real 84 % battery.
+    """
+    monkeypatch.setattr(vitals.platform, "system", lambda: "Android")
+    ram = vitals.get_host_vitals()["ram"]
+    assert ram["total_mb"] > 0, "Android is Linux underneath: /proc/meminfo answers"
+    assert ram["used_pct"] > 0

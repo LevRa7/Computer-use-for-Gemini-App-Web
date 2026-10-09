@@ -59,7 +59,14 @@ def _windows_cpu_usage_pct(sample_seconds: float = 0.1) -> float:
 
 def get_host_vitals() -> Dict[str, Any]:
     hostname = socket.gethostname()
-    system = platform.system()  # 'Linux', 'Darwin', 'Windows'
+    system = platform.system()  # 'Linux', 'Darwin', 'Windows' - and 'Android' on a phone
+
+    # Python on Android (Termux, 3.13+) answers platform.system() == "Android", not
+    # "Linux", although it is Linux underneath and /proc is right there. Without this
+    # a phone reported "0 MB of RAM" - verified on an OPPO PHY110 running Android 16
+    # with Python 3.14, where the memory block came back as 0.0/0.0 MB. The file is
+    # the honest signal, so it decides.
+    linux_like = system == "Linux" or os.path.isfile("/proc/meminfo")
 
     # CPU load average (Unix)
     cpu_load = {"1m": 0.0, "5m": 0.0, "15m": 0.0}
@@ -83,7 +90,7 @@ def get_host_vitals() -> Dict[str, Any]:
     total_mb = 0.0
     free_mb = 0.0
 
-    if system == "Linux":
+    if linux_like:
         total_kb, avail_kb = 0, 0
         try:
             with open("/proc/meminfo", "r") as f:

@@ -1466,12 +1466,36 @@ def _time_block(timezone_name: str = "") -> Dict[str, Any]:
 # hardware: cpu, memory, thermal
 # ---------------------------------------------------------------------------
 
+def _android_soc_name() -> str:
+    """The SoC name from Android's own properties.
+
+    A phone's ``/proc/cpuinfo`` carries only per-core ``processor : N`` lines - no
+    "Hardware", no "model name" - verified on an OPPO PHY110 running Android 16. A
+    parser that accepts "Processor" therefore returns the literal ``"0"``. Android
+    12+ answers through ``ro.soc.model``; older builds through ``ro.board.platform``
+    or ``ro.hardware``.
+    """
+    for prop in ("ro.soc.model", "ro.board.platform", "ro.hardware", "ro.product.board"):
+        value = _android_getprop(prop).strip()
+        if value:
+            return value
+    return ""
+
+
 def _posix_cpu_model() -> str:
     info = _read_text("/proc/cpuinfo")
-    for key in ("model name", "Hardware", "cpu model", "Processor", "Model"):
+    # "processor : 0" is a core index, not a model: a value of digits only is
+    # skipped, which is what made a phone report its CPU as "0".
+    for key in ("model name", "Hardware", "cpu model", "Model", "Processor"):
         match = re.search(r"^%s\s*:\s*(.+)$" % re.escape(key), info, re.M | re.I)
         if match:
-            return match.group(1).strip()
+            value = match.group(1).strip()
+            if value and not value.isdigit():
+                return value
+    if is_termux():
+        soc = _android_soc_name()
+        if soc:
+            return soc
     return platform.processor() or platform.machine()
 
 
@@ -1527,61 +1551,72 @@ def _cpu_block(model: str, source: str,
     )
 
 
+def _parse_meminfo(text: str) -> Dict[str, float]:
+    """The four numbers this module needs out of ``/proc/meminfo``, in MB."""
+    values: Dict[str, int] = {}
+    for line in (text or "").splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        raw = parts[1].strip().split()
+        if not raw:
+            continue
+        try:
+            values[parts[0].strip()] = int(raw[0])
+        except Exception:
+            continue
+    to_mb = lambda kb: round(kb / 1024.0, 1)  # noqa: E731 - one expression, used four times
+    return {
+        "total_mb": to_mb(values.get("MemTotal", 0)),
+        "available_mb": to_mb(values.get("MemAvailable", 0)),
+        "swap_total_mb": to_mb(values.get("SwapTotal", 0)),
+        "swap_free_mb": to_mb(values.get("SwapFree", 0)),
+    }
+
+
 def _memory_block() -> Dict[str, Any]:
     """RAM and swap. ``core.vitals`` owns the per-OS maths; /proc is the fallback.
 
-    A phone reports through the same Linux path, so reusing the existing
-    collector keeps one implementation of the Windows/macOS branches instead of a
-    second copy here.
+    A phone reports through the same Linux path, so reusing the existing collector
+    keeps one implementation of the Windows/macOS branches instead of a second copy
+    here. The collector is not trusted blindly: on Android with Python 3.13+ it used
+    to answer 0 MB (``platform.system()`` is "Android", which it did not know), and a
+    phone that reports "0.0/0.0 MB" is worse than one that says it cannot tell. So a
+    zero total is re-read from ``/proc/meminfo`` - through the module's own reader, so
+    a simulated phone in the tests takes the same path as the real one.
     """
-    fields: Dict[str, Any] = {}
+    ram: Dict[str, Any] = {}
     source = "core.vitals"
     try:
         from core.vitals import get_host_vitals
         ram = get_host_vitals().get("ram") or {}
-        fields.update({
-            "total_mb": ram.get("total_mb", 0.0),
-            "used_mb": ram.get("used_mb", 0.0),
-            "free_mb": ram.get("free_mb", 0.0),
-            "used_pct": ram.get("used_pct", 0.0),
-        })
     except Exception:
-        source = "/proc/meminfo"
-        total_kb = avail_kb = 0
-        for line in _read_text("/proc/meminfo").splitlines():
-            parts = line.split(":")
-            if len(parts) < 2:
-                continue
-            key = parts[0].strip()
-            raw = parts[1].strip().split()
-            if not raw:
-                continue
-            try:
-                value = int(raw[0])
-            except Exception:
-                continue
-            if key == "MemTotal":
-                total_kb = value
-            elif key == "MemAvailable":
-                avail_kb = value
-        total_mb = round(total_kb / 1024.0, 1)
-        free_mb = round(avail_kb / 1024.0, 1)
+        ram = {}
+    total_mb = float(ram.get("total_mb") or 0.0)
+    free_mb = float(ram.get("free_mb") or 0.0)
+    used_mb = float(ram.get("used_mb") or 0.0)
+    used_pct = float(ram.get("used_pct") or 0.0)
+
+    proc = _parse_meminfo(_read_text("/proc/meminfo"))
+    if total_mb <= 0 and proc["total_mb"] > 0:
+        total_mb = proc["total_mb"]
+        free_mb = proc["available_mb"]
         used_mb = max(0.0, round(total_mb - free_mb, 1))
-        fields.update({
-            "total_mb": total_mb,
-            "used_mb": used_mb,
-            "free_mb": free_mb,
-            "used_pct": round(used_mb / total_mb * 100.0, 1) if total_mb else 0.0,
-        })
-    if os.path.isfile("/proc/meminfo"):
-        swap_total_kb = swap_free_kb = 0
-        for line in _read_text("/proc/meminfo").splitlines():
-            if line.startswith("SwapTotal:"):
-                swap_total_kb = int(line.split()[1])
-            elif line.startswith("SwapFree:"):
-                swap_free_kb = int(line.split()[1])
-        fields["swap_total_mb"] = round(swap_total_kb / 1024.0, 1)
-        fields["swap_free_mb"] = round(swap_free_kb / 1024.0, 1)
+        used_pct = round(used_mb / total_mb * 100.0, 1) if total_mb else 0.0
+        source = "/proc/meminfo"
+    if total_mb <= 0:
+        return _unavailable("no memory source reported a total on this platform",
+                            source=source or "core.vitals")
+    fields: Dict[str, Any] = {
+        "total_mb": total_mb,
+        "used_mb": used_mb,
+        "free_mb": free_mb,
+        "used_pct": used_pct,
+    }
+    # Swap only exists on Linux and Android, and the same read answers it.
+    if proc["swap_total_mb"] > 0:
+        fields["swap_total_mb"] = proc["swap_total_mb"]
+        fields["swap_free_mb"] = proc["swap_free_mb"]
     return _block(source, **fields)
 
 
