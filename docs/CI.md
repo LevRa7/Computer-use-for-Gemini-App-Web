@@ -52,9 +52,14 @@ the published one, and only this workflow computes both from the same tree.
 4. `docs/releases/v<version>.md` — the release notes (a test requires the file).
 5. Run the gates locally: `python -m pytest -q -p no:cacheprovider tests/test_updater.py
    tests/test_version_single_source.py`.
-6. Optional pre-flight of the artifacts: `python tools/build-payload-zip.py` and
+6. **A new core module must also be added to the bootstrap list in `install.sh`** —
+   a node that installs itself fetches that list, not a tree, and a module missing
+   from it ships a tool whose implementation is absent (`tests/test_installer_bootstrap.py`
+   fails on exactly that, after a phone install advertised `device_info` and answered
+   "the device layer (core/device.py) is missing from this checkout").
+7. Optional pre-flight of the artifacts: `python tools/build-payload-zip.py` and
    `./build-installer-exe.ps1` (both write to `dist/`, which is not committed).
-7. Commit, then `git tag -a v<version> -m "Antigravity Mesh <version>"`, then
+8. Commit, then `git tag -a v<version> -m "Antigravity Mesh <version>"`, then
    `git push origin main refs/tags/v<version>` — CI does the rest.
 
 > [!NOTE]
