@@ -29,6 +29,13 @@ NODE = "test-node"
 #: The four tools the gateway advertises; they must be the last four in TOOLS.
 SHARE_TOOLS = ("share_file", "serve_dir", "share_list", "unshare")
 
+#: The device branch - the node's own phone or laptop - landed in the same slot as
+#: self-update: between the legacy surface and the shares, so neither of the two
+#: blocks that already had a position had to move. It is its own group rather than
+#: more of PRE_EXISTING_TOOLS: those names really do predate the share surface,
+#: and swallowing the device tools into them would make that name a lie.
+DEVICE_TOOLS = ("device_info", "device_control", "device_capture", "device_messages")
+
 #: The tool surface that existed before shares were added, in order. Self-update
 #: (mesh_update) was added in the same slot: before the share tools, after the
 #: surface that existed when shares landed.
@@ -108,9 +115,14 @@ def isolated_shares(tmp_path, monkeypatch):
 
 def test_the_share_tools_are_the_last_four_and_do_not_disturb_the_rest():
     names = [tool["name"] for tool in mcp_tools.TOOLS]
-    assert names[:len(PRE_EXISTING_TOOLS)] == list(PRE_EXISTING_TOOLS)
-    assert tuple(names[len(PRE_EXISTING_TOOLS):]) == SHARE_TOOLS
-    assert len(names) == 20, "the node must advertise 16 core tools plus 4 share tools"
+    # Three blocks, in the order they were added: legacy, device branch, shares.
+    device_at = len(PRE_EXISTING_TOOLS)
+    shares_at = device_at + len(DEVICE_TOOLS)
+    assert names[:device_at] == list(PRE_EXISTING_TOOLS)
+    assert names[device_at:shares_at] == list(DEVICE_TOOLS)
+    assert tuple(names[shares_at:]) == SHARE_TOOLS
+    assert len(names) == 24, (
+        "the node must advertise 16 legacy tools, 4 device tools and 4 share tools")
 
 
 def test_every_share_tool_has_a_handler_and_a_schema():

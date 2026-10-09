@@ -1,0 +1,34 @@
+[
+  {
+    "type": "lte",
+    "registered": true,
+    "asu": 38,
+    "dbm": -102,
+    "level": 2,
+    "ci": 0,
+    "pci": 0,
+    "tac": 0,
+    "mcc": 0,
+    "mnc": 0,
+    "rsrp": -102,
+    "rsrq": -9,
+    "rssi": -71,
+    "bands": [
+      41
+    ]
+  },
+  {
+    "type": "lte",
+    "registered": false,
+    "asu": 30,
+    "dbm": -110,
+    "level": 1,
+    "pci": 0,
+    "rsrp": -110,
+    "rsrq": -19,
+    "rssi": -79,
+    "bands": [
+      41
+    ]
+  }
+]

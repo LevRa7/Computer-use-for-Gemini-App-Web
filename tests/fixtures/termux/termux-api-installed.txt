@@ -1,0 +1,15 @@
+/data/data/com.termux/files/usr/bin/termux-battery-status
+/data/data/com.termux/files/usr/bin/termux-wifi-connectioninfo
+/data/data/com.termux/files/usr/bin/termux-telephony-deviceinfo
+/data/data/com.termux/files/usr/bin/termux-telephony-cellinfo
+/data/data/com.termux/files/usr/bin/termux-sensor
+/data/data/com.termux/files/usr/bin/termux-camera-info
+/data/data/com.termux/files/usr/bin/termux-microphone-record
+/data/data/com.termux/files/usr/bin/termux-location
+/data/data/com.termux/files/usr/bin/termux-notification
+/data/data/com.termux/files/usr/bin/termux-clipboard-get
+/data/data/com.termux/files/usr/bin/termux-volume
+/data/data/com.termux/files/usr/bin/termux-tts-speak
+/data/data/com.termux/files/usr/bin/termux-torch
+/data/data/com.termux/files/usr/bin/termux-vibrate
+/data/data/com.termux/files/usr/bin/termux-wake-lock

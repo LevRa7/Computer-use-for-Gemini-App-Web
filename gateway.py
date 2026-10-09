@@ -899,7 +899,11 @@ async def messages_endpoint(request: Request):
                 f"REACHABILITY: every tool result you receive in this conversation was produced ON the "
                 f"node, so the node IS online. After any successful tool result, never tell the user the "
                 f"host is unreachable or that the agent did not answer. If a call fails, report its exact "
-                f"error text instead of guessing that the host is down."
+                f"error text instead of guessing that the host is down.\n"
+                f"DEVICE: if system_info reports a 'device' block whose class is phone or tablet, prefer "
+                f"device_info / device_control for device-level work instead of hand-writing termux-* "
+                f"commands through bash_exec, and ask the user before any device_capture or "
+                f"device_messages call."
             )
             )
             )
@@ -1032,6 +1036,230 @@ async def messages_endpoint(request: Request):
                                         "description": "apply: restart the node afterwards (default true)"}
                         },
                         "required": []
+                    }
+                },
+                # The node's own device (a phone/tablet under Termux, or the local
+                # laptop/desktop). core/mcp_tools.TOOLS is the SOURCE OF TRUTH for
+                # these four entries: their descriptions and schemas below are copied
+                # from it value for value (only the layout is the gateway's own - it
+                # deploys as one file and may not import node code). The node is what
+                # actually executes, and the client reads this copy, so any wording
+                # difference here would be a lie the model acts on. Keep them in step;
+                # tests/test_gateway_share_route.py pins the copy for these four.
+                {
+                    "name": "device_info",
+                    "description": (
+                        "One-call report for the device this node runs on: battery and charging, "
+                        "network interfaces with Wi-Fi and cellular signal strength, language, time and "
+                        "timezone, CPU, RAM, storage, cameras, microphones, sensors and what the platform "
+                        "can actually reach. On an Android/Termux node it reads the phone through the "
+                        "termux-api commands; on a laptop or desktop it reads the local system. Every "
+                        "section carries available/source, so 'not exposed here' is never reported as a "
+                        "zero - and on a non-phone the phone-only sections explain themselves instead of "
+                        "failing. Use device_control, device_capture or device_messages to act."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "section": {
+                                "type": "string",
+                                "enum": ["summary", "all", "device", "battery", "network", "locale",
+                                         "time", "hardware", "storage", "cameras", "microphones",
+                                         "sensors", "capabilities"],
+                                "description": "Which blocks to return (default: all)."
+                            },
+                            "sensor": {
+                                "type": "string",
+                                "description": ("Name one sensor to take a single live sample from "
+                                                "(Android only; needs a name from the sensors block).")
+                            },
+                            "fresh": {
+                                "type": "boolean",
+                                "description": "Bypass the short-lived cache (default false)."
+                            },
+                            "quick": {
+                                "type": "boolean",
+                                "description": ("Skip the slow sections: network, cameras, microphones, "
+                                                "sensors (default false).")
+                            }
+                        },
+                        "additionalProperties": False
+                    }
+                },
+                {
+                    "name": "device_control",
+                    "description": (
+                        "Reversible actions on the node's own device: torch, vibrate, volume, screen "
+                        "brightness, text-to-speech, toast, notifications, clipboard, media playback, "
+                        "media scan, wake lock, download, opening or sharing a file, a text dialog and "
+                        "the wallpaper. Each action is a fixed termux-api command on Android and an "
+                        "explained no-op elsewhere; the result names the command and its argv so nothing "
+                        "is guessed. Nothing here is destructive, and all of it is refused when the node "
+                        "runs with MESH_READ_ONLY=1."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["torch", "vibrate", "volume", "volume_get", "brightness",
+                                         "tts_speak", "toast", "notify", "notify_list",
+                                         "notify_remove", "clipboard_get", "clipboard_set", "media",
+                                         "media_scan", "wakelock", "download", "open", "share",
+                                         "dialog", "wallpaper"],
+                                "description": "Action to perform."
+                            },
+                            "on": {
+                                "type": "boolean",
+                                "description": "torch: true lights it, false puts it out."
+                            },
+                            "value": {
+                                "type": "integer",
+                                "description": ("vibrate: milliseconds; volume: level 0-15; "
+                                                "brightness: 0-255.")
+                            },
+                            "stream": {
+                                "type": "string",
+                                "enum": ["music", "call", "alarm", "notification", "ring", "system"],
+                                "description": "volume: which audio stream (default music)."
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": ("tts_speak/toast/notify/clipboard_set/dialog body; media: "
+                                                "play|pause|stop|info.")
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "notify/dialog: heading text."
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": "notify_remove: the id the notification was posted with."
+                            },
+                            "url": {
+                                "type": "string",
+                                "description": "download/open/wallpaper: URL to use."
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "open/share/media/download/media_scan/wallpaper: file on the node."
+                            },
+                            "state": {
+                                "type": "string",
+                                "enum": ["acquire", "release", "status"],
+                                "description": "wakelock: what to do (default status)."
+                            },
+                            "timeout_sec": {
+                                "type": "integer",
+                                "description": "dialog: seconds to wait for the person (5-120, default 30)."
+                            }
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False
+                    }
+                },
+                {
+                    "name": "device_capture",
+                    "description": (
+                        "Camera, microphone, location, fingerprint, USB and infrared actions. These "
+                        "observe the physical world or authenticate the person holding the phone, so the "
+                        "client always asks for confirmation first. A photo or a recording is written to "
+                        "the node's capture directory and is never uploaded anywhere by itself; "
+                        "fingerprint returns only the verdict, never biometric data; USB access requests "
+                        "permission and returns the descriptor but deliberately refuses to run a program "
+                        "for you; and on Android 11+ the Termux:API app has to be in the foreground for a "
+                        "recording. Refused when MESH_READ_ONLY=1."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["camera_list", "camera_photo", "mic_record_start",
+                                         "mic_record_stop", "mic_record_status", "location",
+                                         "fingerprint", "usb_list", "usb_access",
+                                         "infrared_frequencies", "infrared_transmit"],
+                                "description": "Capture action to perform."
+                            },
+                            "camera_id": {
+                                "type": "integer",
+                                "description": "camera_photo: id from camera_list (default 0)."
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": ("camera_photo/mic_record_start: output file (default: the "
+                                                "node's capture directory); usb_access: device path from "
+                                                "usb_list.")
+                            },
+                            "seconds": {
+                                "type": "integer",
+                                "description": "mic_record_start: recording length limit in seconds."
+                            },
+                            "provider": {
+                                "type": "string",
+                                "enum": ["gps", "network", "passive"],
+                                "description": "location: which Android provider to use (default gps)."
+                            },
+                            "frequency": {
+                                "type": "integer",
+                                "description": "infrared_transmit: carrier frequency in Hz."
+                            },
+                            "pattern": {
+                                "type": "string",
+                                "description": ("infrared_transmit: durations in microseconds, e.g. "
+                                                "1000,2000,1000.")
+                            }
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False
+                    }
+                },
+                {
+                    "name": "device_messages",
+                    "description": (
+                        "SMS, call log, contacts and placing a call. This is private data about the person "
+                        "who owns the phone, so the client asks for confirmation AND the node refuses "
+                        "until its operator enables it with MESH_DEVICE_PIM=1. The refusal names the flag "
+                        "and the Android permissions to grant, so the answer is an instruction rather than "
+                        "a dead end. Sending an SMS and placing a call are also refused under "
+                        "MESH_READ_ONLY=1."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["sms_list", "sms_send", "call_log", "contacts", "call"],
+                                "description": "Message or PIM action to perform."
+                            },
+                            "number": {
+                                "type": "string",
+                                "description": "sms_send/call: recipient number."
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "sms_send: message body."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "How many records (1-50, default 10)."
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Record offset, for paging."
+                            },
+                            "type": {
+                                "type": "string",
+                                "description": ("sms_list/call_log: filter, e.g. inbox/sent or "
+                                                "incoming/outgoing/missed.")
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "contacts: filter by name or number."
+                            }
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False
                     }
                 },
                 {
@@ -1252,13 +1480,15 @@ async def messages_endpoint(request: Request):
                 # (PowerShell or cmd.exe on Windows, bash on Linux), so it writes
                 # commands for the right one instead of assuming bash.
                 for key in ("hostname", "os", "kernel", "user", "home", "desktop",
-                            "session_type", "command_shell", "wallpaper", "wallpaper_exists"):
+                            "session_type", "command_shell", "scenario", "device_class",
+                            "wallpaper", "wallpaper_exists"):
                     value = res.get(key)
                     if value not in (None, ""):
                         parts.append("%s: %s" % (key, value))
                 for key in ("memory", "load", "disks", "top_processes"):
                     if res.get(key):
                         parts.append("\n[%s]\n%s" % (key, res.get(key)))
+                parts.extend(_device_report_lines(res))
                 content_text = "\n".join(parts) if parts else json.dumps(res, ensure_ascii=False, indent=2)
         elif name == "system_vitals":
             res = await call_remote_tool(user, name, args)
@@ -1499,6 +1729,14 @@ async def messages_endpoint(request: Request):
                     "Revoked share '{name}' ({slug}). Server stopped={stopped}, files removed={removed}."
                 ).format(name=res.get("name", ""), slug=res.get("slug", ""),
                          stopped=res.get("server_stopped"), removed=res.get("files_removed"))
+        elif name in DEVICE_TOOLS:
+            res = await call_remote_tool(user, name, args)
+            err = remote_tool_error(res)
+            if err:
+                is_error = True
+                content_text = f"[Error] {err}"
+            else:
+                content_text = _format_device_result(name, res)
         else:
             resp["error"] = {"code": -32601, "message": f"Unknown tool: {name}"}
             broadcast_sse(user, resp)
@@ -2148,6 +2386,18 @@ _ANNOT_DESTRUCTIVE = {
     "idempotentHint": False,
     "openWorldHint": False,
 }
+#: Camera, microphone, location, SMS and contacts. They delete nothing, so
+#: "destructive" is not literally true - but ``destructiveHint`` is the only hint
+#: clients such as Gemini Spark reliably turn into a "confirm this action?" prompt,
+#: and these calls observe the physical world (or a person's private messages)
+#: without the operator being able to see it happen. Marking them destructive is
+#: therefore the honest safety choice, and it is documented in the README.
+_ANNOT_SENSITIVE = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 
 #: Confirmation policy per advertised tool; names must match core/mcp_tools.TOOLS.
 #: A tool left out stays unannotated on purpose and therefore asks for
@@ -2165,6 +2415,7 @@ TOOL_ANNOTATIONS = {
     "job_output": _ANNOT_READ_ONLY,
     "job_list": _ANNOT_READ_ONLY,
     "share_list": _ANNOT_READ_ONLY,
+    "device_info": _ANNOT_READ_ONLY,
     # Commands run without a dialog; classify_command() refuses the gated classes
     # (install/delete, sudo, system paths) and routes them to system_change.
     "bash_exec": _ANNOT_UNCONFIRMED_WRITE,
@@ -2176,6 +2427,11 @@ TOOL_ANNOTATIONS = {
     # Stopping a job is neither an install nor a delete, and bash_exec can
     # terminate the same process anyway, so no prompt is spent on it.
     "job_kill": _ANNOT_UNCONFIRMED_WRITE,
+    # Reversible actions on the node's own device (torch, volume, TTS, ...): they
+    # change state, but nothing is deleted, nothing is gated and nothing leaves the
+    # host. The node advertises the same hints and a test compares the two, so this
+    # stays the plain local-write profile rather than the classifier-backed one.
+    "device_control": _ANNOT_LOCAL_WRITE,
     # publishing something on the internet: no dialog either, but the client is told
     # the tool reaches outside the host
     "share_file": _ANNOT_PUBLISH,
@@ -2185,6 +2441,10 @@ TOOL_ANNOTATIONS = {
     "system_write": _ANNOT_DESTRUCTIVE,
     "mesh_update": _ANNOT_DESTRUCTIVE,
     "unshare": _ANNOT_DESTRUCTIVE,
+    # sensitive: observing the world or a person's private messages. Nothing is
+    # deleted, but the client must always ask - see _ANNOT_SENSITIVE above.
+    "device_capture": _ANNOT_SENSITIVE,
+    "device_messages": _ANNOT_SENSITIVE,
 }
 
 
@@ -2257,6 +2517,199 @@ SHARE_TOOL_SPECS = [
         },
     },
 ]
+
+
+# The node's own device: one relay branch in tools/call, one formatter. The four
+# names must match core/mcp_tools.TOOLS exactly (the same parity test as the
+# share tools above), and DEVICE_TOOLS is deliberately a tuple so the branch is a
+# single membership test instead of four elifs.
+#
+# core/mcp_tools.TOOLS is the source of truth for the device_* specs in tools/list
+# as well. Their descriptions and schemas above are copied from it verbatim; an
+# earlier draft of this file carried different prose, which the node's landed
+# version superseded. The node executes these calls and the client reads this
+# copy, so a wording difference here would be a lie the model acts on.
+DEVICE_TOOLS = ("device_info", "device_control", "device_capture", "device_messages")
+
+#: A device report is JSON by contract and ``device_info(section="all")`` can run
+#: to megabytes, so the gateway shows the head and names the way to ask for one
+#: block by itself - rather than cutting a table in the middle with no way back.
+DEVICE_REPORT_LIMIT = 8000
+
+
+def _device_report_lines(res):
+    """Render the device blocks of a ``system_info`` answer as readable lines.
+
+    The gateway used to print a fixed list of the original fields, which silently
+    dropped everything the device branch added - the client asked for the battery
+    and got a summary without it. Every block is rendered as either its facts or,
+    when the platform has no source for it, ``available: false`` with the reason and
+    the fix, because "not exposed here" and "0 %" must not look the same to a model.
+    """
+    if not isinstance(res, dict):
+        return []
+    lines = []
+    hint = res.get("device_hint")
+    if hint:
+        lines.append("\n[device] %s" % hint)
+
+    def block(name):
+        value = res.get(name)
+        return value if isinstance(value, dict) else None
+
+    def facts(name, fields, prefix=""):
+        value = block(name)
+        if value is None:
+            return
+        if value.get("available") is False:
+            line = "%s%s: not available - %s" % (prefix, name, value.get("reason") or "no reason given")
+            if value.get("fix"):
+                line += " (fix: %s)" % value["fix"]
+            lines.append(line)
+            return
+        shown = ["%s=%s" % (key, value[key]) for key in fields if value.get(key) not in (None, "")]
+        if shown:
+            lines.append("%s%s: %s" % (prefix, name, ", ".join(shown)))
+
+    device = block("device")
+    if device and device.get("available") is not False:
+        shown = [device.get(key) for key in ("class", "manufacturer", "model", "android_release")]
+        shown = [str(item) for item in shown if item]
+        if shown:
+            lines.append("\n[device] " + " ".join(shown))
+    facts("battery", ("percent", "status", "plugged", "temperature_c", "health",
+                      "time_remaining_s", "ac_online"))
+    network = block("network")
+    if network:
+        if network.get("available") is False:
+            facts("network", ())
+        else:
+            if network.get("signal"):
+                lines.append("signal: %s" % network["signal"])
+            shown = [network.get(key) for key in ("connected_kind", "interface_count",
+                                                  "default_route")]
+            shown = [str(item) for item in shown if item not in (None, "")]
+            if shown:
+                lines.append("network: " + ", ".join(shown))
+            wifi = network.get("wifi") or {}
+            if wifi:
+                detail = ["%s=%s" % (key, wifi[key]) for key in ("ssid", "rssi_dbm",
+                                                                 "link_speed_mbps", "frequency_mhz")
+                          if wifi.get(key) not in (None, "")]
+                if detail:
+                    lines.append("wifi: " + ", ".join(detail))
+            cellular = network.get("cellular") or {}
+            if cellular:
+                detail = ["%s=%s" % (key, cellular[key])
+                          for key in ("operator", "network_type", "signal_dbm", "level",
+                                      "roaming", "data_state")
+                          if cellular.get(key) not in (None, "")]
+                if detail:
+                    lines.append("cellular: " + ", ".join(detail))
+                if cellular.get("cellinfo_reason"):
+                    lines.append("cellular: %s" % cellular["cellinfo_reason"])
+    facts("locale", ("language", "region", "encoding"))
+    facts("time", ("iso_local", "utc_offset", "timezone", "abbreviation"))
+    hardware = block("hardware")
+    if hardware and hardware.get("available") is not False:
+        cpu = hardware.get("cpu") or {}
+        if cpu:
+            shown = ["%s=%s" % (key, cpu[key])
+                     for key in ("model", "cores", "freq_mhz_max", "temp_c", "load")
+                     if cpu.get(key) not in (None, "")]
+            if shown:
+                lines.append("cpu: " + ", ".join(shown))
+        memory = hardware.get("memory") or {}
+        if memory:
+            shown = ["%s=%s" % (key, memory[key])
+                     for key in ("total_mb", "used_mb", "free_mb", "used_pct", "swap_total_mb")
+                     if memory.get(key) not in (None, "")]
+            if shown:
+                lines.append("memory: " + ", ".join(shown))
+        thermal = hardware.get("thermal") or []
+        if thermal:
+            lines.append("thermal: " + ", ".join(
+                "%s=%s%s" % (item.get("name"), item.get("value"),
+                             item.get("unit") or "") for item in thermal[:6]
+                if isinstance(item, dict)))
+    storage = block("storage")
+    if storage:
+        if storage.get("available") is False:
+            facts("storage", ())
+        else:
+            shown = ["%s=%s" % (key, storage[key])
+                     for key in ("root", "total_gb", "free_gb", "used_pct", "shared",
+                                 "capture_dir")
+                     if storage.get(key) not in (None, "")]
+            if shown:
+                lines.append("storage: " + ", ".join(shown))
+            if storage.get("shared_fix"):
+                lines.append("storage: %s" % storage["shared_fix"])
+    for name, fields in (("cameras", ("count",)), ("microphones", ("count",)),
+                         ("sensors", ("count", "sampling"))):
+        value = block(name)
+        if value is None:
+            continue
+        if value.get("available") is False:
+            facts(name, ())
+            continue
+        shown = ["%s=%s" % (key, value[key]) for key in fields if value.get(key) not in (None, "")]
+        items = value.get(name) or value.get("sensors") or []
+        names = []
+        for item in items[:4] if isinstance(items, list) else []:
+            if isinstance(item, dict):
+                label = item.get("name") or item.get("facing") or item.get("id")
+                if label not in (None, ""):
+                    names.append(str(label))
+            elif isinstance(item, str):
+                names.append(item)
+        text = ", ".join(shown)
+        if names:
+            text = (text + " (" + ", ".join(names) + ")") if text else ", ".join(names)
+        if text:
+            lines.append("%s: %s" % (name, text))
+    capabilities = block("capabilities")
+    if capabilities:
+        api = capabilities.get("termux_api") or capabilities.get("api") or {}
+        if api:
+            lines.append("termux-api: installed=%s" % api.get("installed"))
+            if api.get("missing"):
+                lines.append("termux-api missing: %s" % ", ".join(api["missing"][:8]))
+        if capabilities.get("app_reachable") is False:
+            lines.append("termux-api app: not answering - %s"
+                         % (capabilities.get("app_fix") or "open the Termux:API app once"))
+        permissions = capabilities.get("permissions") or {}
+        denied = sorted(name for name, state in permissions.items() if state == "denied")
+        if denied:
+            lines.append("permissions denied: %s" % ", ".join(denied))
+    return lines
+
+
+def _format_device_result(name, res):
+    """Render one ``device_*`` answer for the model.
+
+    "Not available on this node" is deliberately NOT an error: on a Windows or
+    Linux laptop a phone-only action is the normal answer, the node reports it as
+    ``available: false`` with a reason (and often a fix), and reading that as a
+    crash would tell the model the host is broken when it is merely not a phone.
+    """
+    if not isinstance(res, dict):
+        return json.dumps(res, ensure_ascii=False, indent=2, default=str)
+    if "error" in res:
+        # The relay already turns a real failure into isError; this keeps the text
+        # consistent with the other "[Error] ..." answers if this path is reached.
+        return "[Error] " + str(res.get("error"))
+    if res.get("available") is False:
+        lines = ["%s: not available on this node - %s"
+                 % (name, res.get("reason") or "this device does not expose it")]
+        if res.get("fix"):
+            lines.append("Fix: %s" % res.get("fix"))
+        return "\n".join(lines)
+    text = json.dumps(res, ensure_ascii=False, indent=2, default=str)
+    if len(text) > DEVICE_REPORT_LIMIT:
+        text = text[:DEVICE_REPORT_LIMIT] + (
+            "\n... [device report truncated; call the tool again with section=<name> for one block]")
+    return text
 
 
 def _share_response(status: int, message: str, extra=None) -> Response:

@@ -1,0 +1,32 @@
+[
+  {
+    "stream": "call",
+    "volume": 9,
+    "max_volume": 9
+  },
+  {
+    "stream": "system",
+    "volume": 2,
+    "max_volume": 16
+  },
+  {
+    "stream": "ring",
+    "volume": 2,
+    "max_volume": 16
+  },
+  {
+    "stream": "music",
+    "volume": 40,
+    "max_volume": 160
+  },
+  {
+    "stream": "alarm",
+    "volume": 16,
+    "max_volume": 16
+  },
+  {
+    "stream": "notification",
+    "volume": 13,
+    "max_volume": 16
+  }
+]

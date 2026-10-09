@@ -1,0 +1,20 @@
+{
+  "data_enabled": "true",
+  "data_activity": "none",
+  "data_state": "disconnected",
+  "device_id": null,
+  "device_software_version": "28",
+  "phone_count": 2,
+  "phone_type": "gsm",
+  "network_operator": "00000",
+  "network_operator_name": "Example",
+  "network_country_iso": "zz",
+  "network_type": "lte",
+  "network_roaming": false,
+  "sim_country_iso": "zz",
+  "sim_operator": "28204",
+  "sim_operator_name": "Example",
+  "sim_serial_number": null,
+  "sim_subscriber_id": null,
+  "sim_state": "ready"
+}

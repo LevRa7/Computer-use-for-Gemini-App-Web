@@ -59,6 +59,25 @@ try:  # pragma: no cover - exercised implicitly by the environment
 except Exception:  # pragma: no cover
     _core_get_host_vitals = None  # type: ignore
 
+# ---------------------------------------------------------------------------
+# Optional dependencies of the device branch.
+#
+# ``core/device.py`` is the platform telemetry layer and ``core/termux.py`` the
+# Termux:API adapter. Both are standard-library-only, but they are imported
+# defensively for the same reason as the vitals collector above: a checkout that
+# is missing one file must still serve every non-device tool instead of failing
+# to import at all.
+# ---------------------------------------------------------------------------
+try:  # pragma: no cover - the file ships with the node
+    from core import device as _device  # type: ignore
+except Exception:  # pragma: no cover
+    _device = None  # type: ignore
+
+try:  # pragma: no cover - the file ships with the node
+    from core import termux as _termux  # type: ignore
+except Exception:  # pragma: no cover
+    _termux = None  # type: ignore
+
 # Optional: the public file-share server. Not every checkout carries it, so the
 # import is guarded - when it is present it is configured with the same public
 # domain as everything else, from core/domain.py.
@@ -215,6 +234,22 @@ _MAX_OUTPUT_CHARS = _DEFAULT_MAX_OUTPUT_CHARS
 #: core/domain.py", which is the normal case.
 _PUBLIC_URL: Optional[str] = None
 
+#: Device branch switches (``MESH_DEVICE*``, see :func:`configure`):
+#: ``_DEVICE_ENABLED`` is ``None`` for "auto" (the branch answers everywhere and
+#: the phone-only actions explain themselves on a desktop), ``False`` when the
+#: operator turned it off, ``True`` when it was forced on.
+_DEVICE_ENABLED: Optional[bool] = None
+#: Optional allowlist of action names for the three action tools. ``None`` means
+#: every action the build implements.
+_DEVICE_ACTIONS: Optional[List[str]] = None
+#: SMS / call log / contacts / placing a call. Off by default: the phone is often
+#: a shared device and this is the operator's private data.
+_DEVICE_PIM = False
+#: Keep ``system_info`` instant by skipping network/cameras/microphones/sensors.
+_DEVICE_QUICK = False
+#: Wall-clock budget for the device blocks inside ``system_info``.
+DEVICE_DEADLINE = 7.0
+
 _META_LOCK = threading.RLock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
 
@@ -252,16 +287,18 @@ def configure(**kwargs: Any) -> None:
     """(Re)configure the module.  All keys are optional.
 
     Recognised keys: ``workspace``, ``read_only``, ``allow_write``,
-    ``write_roots``, ``jobs_dir``, ``max_output_chars``, ``public_url``, and the
-    web-share keys ``web_dir``, ``mesh_user``, ``max_share_bytes``,
-    ``max_shares``, ``web_listing``.
+    ``write_roots``, ``jobs_dir``, ``max_output_chars``, ``public_url``,
+    the web-share keys ``web_dir``, ``mesh_user``, ``max_share_bytes``,
+    ``max_shares``, ``web_listing``, and the device-branch keys ``device``
+    (``auto``/``0``/``1``), ``device_actions``, ``capture_dir``, ``device_pim``
+    and ``device_quick``.
 
     ``public_url`` overrides the public domain for links this node publishes;
     leaving it out keeps the value that :mod:`core.domain` resolves (environment,
     then the domain file, then the one default).
     """
     global _WORKSPACE, _READ_ONLY, _WRITE_ROOTS, _JOBS_DIR, _MAX_OUTPUT_CHARS
-    global _PUBLIC_URL
+    global _PUBLIC_URL, _DEVICE_ENABLED, _DEVICE_ACTIONS, _DEVICE_PIM, _DEVICE_QUICK
 
     if kwargs.get("workspace"):
         _WORKSPACE = os.path.realpath(os.path.expanduser(str(kwargs["workspace"])))
@@ -282,6 +319,41 @@ def configure(**kwargs: Any) -> None:
             pass
     if "public_url" in kwargs:
         _PUBLIC_URL = domain.normalise_public_base_url(kwargs.get("public_url")) or None
+
+    # --- device branch ------------------------------------------------------
+    # ``device=auto`` (the default) keeps the branch advertised everywhere: the
+    # tool surface is declared by the gateway for EVERY node, so a phone tool that
+    # vanished on a desktop would break the node/gateway contract. What changes per
+    # platform is the answer, not the presence of the tool.
+    if "device" in kwargs and kwargs["device"] is not None:
+        value = kwargs["device"]
+        if isinstance(value, bool):
+            _DEVICE_ENABLED = value
+        else:
+            text = str(value).strip().lower()
+            if text in ("auto", ""):
+                _DEVICE_ENABLED = None
+            elif text in ("1", "true", "yes", "on", "y", "t"):
+                _DEVICE_ENABLED = True
+            else:
+                _DEVICE_ENABLED = False
+    if "device_actions" in kwargs:
+        raw = kwargs.get("device_actions")
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            _DEVICE_ACTIONS = None
+        else:
+            parts = raw.replace(";", ",").split(",") if isinstance(raw, str) else list(raw)
+            actions = [str(part).strip().lower() for part in parts if str(part).strip()]
+            _DEVICE_ACTIONS = actions or None
+    if "device_pim" in kwargs and kwargs["device_pim"] is not None:
+        _DEVICE_PIM = _parse_bool(kwargs["device_pim"])
+    if "device_quick" in kwargs and kwargs["device_quick"] is not None:
+        _DEVICE_QUICK = _parse_bool(kwargs["device_quick"])
+    if "capture_dir" in kwargs and _device is not None:
+        try:
+            _device.configure(capture_dir=kwargs.get("capture_dir") or None)
+        except Exception:
+            pass
 
     # The public file-share server publishes links; it takes its base from the same
     # single source as everything else (core/web_share.py ships only with some
@@ -739,6 +811,24 @@ def _tool_mesh_status(args: Dict[str, Any]) -> Dict[str, Any]:
         payload["host_uptime_seconds"] = int(uptime_s)
         payload["host_uptime_human"] = "%dh %dm" % (int(uptime_s // 3600), int((uptime_s % 3600) // 60))
     payload["node_version"] = version_module.__version__
+    # What kind of machine answered, and whether it is running on its own battery:
+    # the model should know it is talking to a phone on 12% before it starts a
+    # build, and this costs one cached block rather than a second tool call.
+    if _device is not None and _DEVICE_ENABLED is not False:
+        try:
+            blocks = _device.collect(sections=["device", "battery"], deadline=3.5)
+            device_block = blocks.get("device") or {}
+            battery = blocks.get("battery") or {}
+            payload["device_class"] = device_block.get("class", "")
+            payload["scenario"] = _device_scenario()
+            if device_block.get("model"):
+                payload["device_model"] = device_block.get("model")
+            if battery.get("available"):
+                payload["battery_percent"] = battery.get("percent")
+                payload["on_battery"] = (battery.get("plugged") == "battery"
+                                         or battery.get("ac_online") is False)
+        except Exception:
+            pass
     try:
         # Local state only: a status call must never wait on the network.
         state = updater.status()
@@ -921,6 +1011,104 @@ def windows_wallpaper() -> str:
     return os.path.expandvars(path) if path else ""
 
 
+def _device_scenario() -> str:
+    """``termux`` | ``linux`` | ``windows`` | ``darwin`` - asked, never guessed.
+
+    ``core/device.py`` owns the decision (Windows first, then the Termux signals,
+    then Darwin, else Linux) so that every tool, the telemetry and the tests all
+    read the same answer. The fallback below exists only so a partial checkout (a
+    device layer without the resolver) still classifies correctly instead of
+    answering "unknown" and refusing every phone action.
+    """
+    if _device is None:
+        return "unknown"
+    resolver = getattr(_device, "scenario", None)
+    try:
+        if callable(resolver):
+            return str(resolver())
+    except Exception:
+        pass
+    try:
+        if os.name == "nt":
+            return "windows"
+        if _device.is_termux():
+            return "termux"
+        import platform
+        return "darwin" if platform.system() == "Darwin" else "linux"
+    except Exception:
+        return "unknown"
+
+
+def _device_timeout_hint(blocks: Any) -> Optional[str]:
+    """One sentence when several phone sections timed out for the same reason.
+
+    A phone whose Termux:API app is missing, never opened, or frozen by battery
+    optimisation makes EVERY ``termux-*`` call wait forever. The report would then
+    be five identical "timed out" blocks and the model would have to infer the one
+    root cause - or worse, tell the user the phone is broken. Naming the cause once
+    is the difference between "the device does not answer" and "open the Termux:API
+    app". Only per-command timeouts count (their reason names the command); a block
+    that missed the overall deadline is a different story and is left alone.
+    """
+    if not isinstance(blocks, dict):
+        return None
+    timed_out: List[str] = []
+    for name, block in blocks.items():
+        if not isinstance(block, dict) or block.get("available") is not False:
+            continue
+        reason = str(block.get("reason") or "").lower()
+        if "timed out" in reason and "termux-" in reason:
+            timed_out.append(str(name))
+    if len(timed_out) < 2:
+        return None
+    fix = ""
+    for name in timed_out:
+        candidate = blocks.get(name) or {}
+        if isinstance(candidate, dict) and candidate.get("fix"):
+            fix = str(candidate["fix"])
+            break
+    hint = ("%d sections timed out (%s). On an Android node that is usually one cause: "
+            "the Termux:API app is not installed, has never been opened once, or is "
+            "frozen by battery optimisation - every termux-api call then waits forever "
+            "instead of failing."
+            % (len(timed_out), ", ".join(sorted(timed_out))))
+    if fix:
+        hint += " Fix: " + fix
+    return hint
+
+
+def _device_blocks(quick: Optional[bool] = None) -> Dict[str, Any]:
+    """Device blocks for ``system_info``: battery, signal, time, cpu, cameras...
+
+    The whole collection runs under :data:`DEVICE_DEADLINE` in one thread pool, so
+    the slowest source (a frozen Termux:API app, ``system_profiler``) cannot stall
+    a status call, and a block that could not be read reports why instead of a
+    fabricated zero.
+    """
+    if _device is None:
+        return {"device": {"available": False,
+                           "reason": "core/device.py is missing from this checkout"}}
+    if _DEVICE_ENABLED is False:
+        return {"device": {"available": False,
+                           "reason": "device telemetry is switched off by the operator "
+                                     "(MESH_DEVICE=0)"}}
+    try:
+        blocks = _device.collect(deadline=DEVICE_DEADLINE,
+                                 quick=_DEVICE_QUICK if quick is None else bool(quick))
+    except Exception as exc:                     # telemetry never breaks the summary
+        return {"device": {"available": False,
+                           "reason": "device collection failed: %s: %s"
+                                     % (type(exc).__name__, exc)}}
+    if not isinstance(blocks, dict):
+        return {}
+    blocks = dict(blocks)
+    blocks["scenario"] = _device_scenario()
+    hint = _device_timeout_hint(blocks)
+    if hint:
+        blocks["device_hint"] = hint
+    return blocks
+
+
 def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
     """A one-call summary of the host.
 
@@ -989,6 +1177,15 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
         info["desktop"] = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or ""
         info["session_type"] = os.environ.get("XDG_SESSION_TYPE", "")
         info.update({name: run_shell(cmd) for name, cmd in system_info_posix_commands().items()})
+
+    # Device telemetry (core/device.py): battery and charging state, network and
+    # signal strength, locale, language, time, timezone, CPU, RAM, storage,
+    # cameras, microphones and sensors. This is the half of the answer a phone user
+    # asks for first, and on a laptop it is the battery - so it runs on every
+    # platform, in one deadline, and each block says `available: false` + `reason`
+    # when the platform has no source for it instead of reporting a fake zero.
+    info.update(_device_blocks())
+
     # Current wallpaper, the usual first question for a desktop node.
     wallpaper = windows_wallpaper() if system == "Windows" else ""
     if not wallpaper and system != "Windows":
@@ -1018,12 +1215,549 @@ def _tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_system_vitals(args: Dict[str, Any]) -> Any:
+    vitals = None
     try:
         if _core_get_host_vitals is not None:
-            return _core_get_host_vitals()
+            vitals = _core_get_host_vitals()
     except Exception:
-        pass
-    return _fallback_host_vitals()
+        vitals = None
+    if vitals is None:
+        vitals = _fallback_host_vitals()
+    # A laptop's most important "vital" is its battery, and a phone's is battery
+    # plus temperature: both come from the same cached device block that
+    # system_info already uses, so asking here costs nothing extra.
+    if _device is not None and _DEVICE_ENABLED is not False and isinstance(vitals, dict):
+        try:
+            blocks = _device.collect(sections=["battery", "hardware"], deadline=4.0)
+        except Exception:
+            blocks = {}
+        battery = blocks.get("battery") or {}
+        hardware = blocks.get("hardware") or {}
+        if battery:
+            vitals["battery"] = battery
+        thermal = hardware.get("thermal") or []
+        if thermal:
+            vitals["thermal"] = thermal
+    return vitals
+
+
+# ---------------------------------------------------------------------------
+# Device branch: report and control the device the node itself runs on
+# ---------------------------------------------------------------------------
+# One rule shapes this whole section: the tool surface is advertised by the
+# gateway for EVERY node (it holds a static copy that must match this file), so a
+# phone-only tool cannot disappear on a desktop. What differs per platform is the
+# ANSWER - `available: false` plus the reason and, where one exists, the fix.
+#
+# The three action tools execute nothing but `termux-*` argv lists through
+# core/termux.py: no shell, no command assembled from model input, a hard timeout
+# per call, and every call guarded by the operator's switches (MESH_DEVICE,
+# MESH_DEVICE_ACTIONS, MESH_DEVICE_PIM, MESH_READ_ONLY).
+
+#: The actions each tool accepts. Kept as tuples next to the code that implements
+#: them, and reused for the allowlist check and the "unknown action" message.
+DEVICE_CONTROL_ACTIONS: Tuple[str, ...] = (
+    "torch", "vibrate", "volume", "volume_get", "brightness", "tts_speak", "toast",
+    "notify", "notify_list", "notify_remove", "clipboard_get", "clipboard_set",
+    "media", "media_scan", "wakelock", "download", "open", "share", "dialog", "wallpaper",
+)
+DEVICE_CAPTURE_ACTIONS: Tuple[str, ...] = (
+    "camera_list", "camera_photo", "mic_record_start", "mic_record_stop",
+    "mic_record_status", "location", "fingerprint", "usb_list", "usb_access",
+    "infrared_frequencies", "infrared_transmit",
+)
+DEVICE_MESSAGES_ACTIONS: Tuple[str, ...] = (
+    "sms_list", "sms_send", "call_log", "contacts", "call",
+)
+
+#: Audio streams termux-volume understands.
+_DEVICE_STREAMS = ("music", "call", "alarm", "notification", "ring", "system")
+
+
+def _device_branch_error() -> Optional[Dict[str, Any]]:
+    """Why the device branch cannot answer at all, or ``None`` when it can."""
+    if _device is None:
+        return {"available": False,
+                "reason": "the device layer (core/device.py) is missing from this checkout"}
+    if _DEVICE_ENABLED is False:
+        return {"available": False,
+                "reason": "the device tools are switched off by the operator (MESH_DEVICE=0)",
+                "fix": "set MESH_DEVICE=auto (or 1) in agent.env and restart the node"}
+    return None
+
+
+def _action_allowed(action: str) -> Optional[Dict[str, Any]]:
+    """Apply the optional ``MESH_DEVICE_ACTIONS`` allowlist."""
+    if _DEVICE_ACTIONS is None:
+        return None
+    if action in _DEVICE_ACTIONS:
+        return None
+    return {"available": False, "action": action,
+            "reason": "the operator restricted the device tools to: %s"
+                      % ", ".join(_DEVICE_ACTIONS),
+            "fix": "add this action to MESH_DEVICE_ACTIONS in agent.env, or clear it"}
+
+
+def _android_only(action: str) -> Optional[Dict[str, Any]]:
+    """A phone action on a laptop is an explanation, not a failure."""
+    scenario = _device_scenario()
+    if scenario == "termux":
+        return None
+    return {"available": False, "action": action, "scenario": scenario,
+            "reason": ("this action drives an Android phone through the Termux:API, "
+                       "and this node runs on '%s'" % scenario),
+            "fix": ("run the node on the phone itself (docs/TERMUX.md); on a laptop or "
+                    "desktop use device_info for telemetry instead")}
+
+
+def _read_only_refusal(action: str) -> Optional[Dict[str, Any]]:
+    if not _READ_ONLY:
+        return None
+    return {"available": False, "action": action,
+            "reason": ("this node is read-only (MESH_READ_ONLY=1): only observation is "
+                       "allowed, and this action changes something on the device")}
+
+
+def _termux_action(action: str, command: str, argv: Sequence[Any] = (),
+                   timeout: float = 10.0, parse: bool = True) -> Dict[str, Any]:
+    """Run one ``termux-*`` argv through the adapter and shape the answer.
+
+    Every guard is applied here rather than in each action handler, so a new action
+    cannot accidentally skip the allowlist, the platform check or the timeout.
+    """
+    for guard in (_device_branch_error(), _action_allowed(action), _android_only(action)):
+        if guard:
+            guard = dict(guard)
+            guard.setdefault("action", action)
+            guard.setdefault("command", command)
+            return guard
+    adapter = _termux
+    if adapter is None:
+        return {"available": False, "action": action, "command": command,
+                "reason": "core/termux.py is missing from this checkout"}
+    argv = [str(item) for item in argv]
+    try:
+        runner = adapter.run_json if parse else adapter.run_text
+        result = runner(command, argv, timeout)
+    except Exception as exc:
+        return {"ok": False, "action": action, "command": command, "argv": argv,
+                "reason": "%s: %s" % (type(exc).__name__, exc)}
+    payload: Dict[str, Any] = {"action": action, "command": command, "argv": argv}
+    if result.get("ok"):
+        payload["ok"] = True
+        payload["result"] = result.get("value")
+        if result.get("parsed") is False:
+            payload["note"] = "the command answered plain text, not JSON"
+        if result.get("duration_ms") is not None:
+            payload["duration_ms"] = result.get("duration_ms")
+        return payload
+    payload["ok"] = False
+    payload["reason"] = result.get("reason") or "the command did not answer"
+    for key in ("fix", "missing", "denied", "timeout", "raw"):
+        if result.get(key):
+            payload[key] = result[key]
+    return payload
+
+
+def _require_arg(args: Dict[str, Any], name: str, action: str) -> Any:
+    """Return the argument or a shaped "missing argument" answer (never raises)."""
+    value = args.get(name)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return value
+
+
+def _missing_arg(action: str, name: str, wants: str) -> Dict[str, Any]:
+    return {"error": "action %r needs %s: %s" % (action, name, wants)}
+
+
+def _capture_path(args: Dict[str, Any], default_name: str) -> str:
+    """Where a capture is written: the caller's path, else the capture directory.
+
+    The directory is created here (not by the tool) so the answer can report the
+    real path and the model never has to guess whether the write worked.
+    """
+    raw = args.get("path")
+    if isinstance(raw, str) and raw.strip():
+        target = _resolve(raw.strip())
+    else:
+        base = _device.capture_dir() if _device is not None else os.path.expanduser("~")
+        target = os.path.join(base, default_name)
+    parent = os.path.dirname(target)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception:
+            pass
+    return target
+
+
+def _file_note(path: str) -> Dict[str, Any]:
+    """Size and sha256 of a file the node just produced, when it exists."""
+    try:
+        return {"path": path, "bytes": os.path.getsize(path)}
+    except Exception:
+        return {"path": path}
+
+
+def _tool_device_info(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Full device report: every block, or one of them, on any platform."""
+    guard = _device_branch_error()
+    if guard:
+        return guard
+    section = str(args.get("section") or "all").strip().lower()
+    known = tuple(_device.ALL_SECTIONS)
+    if section not in ("summary", "all") and section not in known:
+        return {"error": "unknown section %r: use %s, summary or all"
+                         % (section, ", ".join(known))}
+    quick = _parse_flag(args.get("quick"))
+    fresh = _parse_flag(args.get("fresh"))
+    if section == "summary":
+        try:
+            return _device.summary(quick=quick)
+        except Exception as exc:
+            return {"error": "device summary failed: %s: %s" % (type(exc).__name__, exc)}
+    sensor = args.get("sensor")
+    sections = ["all"] if section == "all" else [section]
+    try:
+        blocks = _device.collect(sections=sections, fresh=fresh, quick=quick,
+                                 sensor=str(sensor) if sensor else None)
+    except Exception as exc:
+        return {"error": "device collection failed: %s: %s" % (type(exc).__name__, exc)}
+    device_block = blocks.get("device") or {}
+    result = {
+        "scenario": _device_scenario(),
+        "device_class": device_block.get("class", ""),
+        "sections": blocks,
+    }
+    hint = _device_timeout_hint(blocks)
+    if hint:
+        result["hint"] = hint
+    return result
+
+
+def _tool_device_control(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Reversible device actions (torch, volume, clipboard, notifications...)."""
+    guard = _device_branch_error()
+    if guard:
+        return guard
+    action = str(args.get("action") or "").strip().lower()
+    if action not in DEVICE_CONTROL_ACTIONS:
+        return {"error": "unknown action %r: use %s"
+                         % (action, ", ".join(DEVICE_CONTROL_ACTIONS))}
+    guard = _read_only_refusal(action) or _action_allowed(action)
+    if guard:
+        return guard
+
+    if action == "torch":
+        state = "on" if _parse_flag(args.get("on")) else "off"
+        return _termux_action(action, "termux-torch", [state], timeout=8.0)
+    if action == "vibrate":
+        duration = _clamp_int(args.get("value"), 1, 60000, 500)
+        return _termux_action(action, "termux-vibrate", ["-d", duration], timeout=8.0)
+    if action == "volume":
+        value = args.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return _missing_arg(action, "value", "a level from 0 to 15")
+        stream = str(args.get("stream") or "music").strip().lower()
+        if stream not in _DEVICE_STREAMS:
+            return {"error": "stream must be one of: %s" % ", ".join(_DEVICE_STREAMS)}
+        level = _clamp_int(value, 0, 15, 0)
+        return _termux_action(action, "termux-volume", ["-s", stream, level], timeout=8.0)
+    if action == "volume_get":
+        return _termux_action(action, "termux-volume", [], timeout=8.0)
+    if action == "brightness":
+        value = args.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return _missing_arg(action, "value", "a brightness from 0 to 255")
+        return _termux_action(action, "termux-brightness", [_clamp_int(value, 0, 255, 128)],
+                              timeout=8.0)
+    if action in ("tts_speak", "toast"):
+        text = _require_arg(args, "text", action)
+        if text is None:
+            return _missing_arg(action, "text", "the words to speak or show")
+        command = "termux-tts-speak" if action == "tts_speak" else "termux-toast"
+        return _termux_action(action, command, [str(text)], timeout=15.0)
+    if action == "notify":
+        body = _require_arg(args, "text", action)
+        if body is None:
+            return _missing_arg(action, "text", "the notification body")
+        argv: List[Any] = ["--title", str(args.get("title") or "Antigravity Mesh"),
+                           "--content", str(body)]
+        if args.get("id") is not None:
+            argv += ["--id", str(args.get("id"))]
+        return _termux_action(action, "termux-notification", argv, timeout=10.0)
+    if action == "notify_list":
+        return _termux_action(action, "termux-notification-list", [], timeout=10.0)
+    if action == "notify_remove":
+        notification_id = _require_arg(args, "id", action)
+        if notification_id is None:
+            return _missing_arg(action, "id", "the id used when the notification was posted")
+        return _termux_action(action, "termux-notification-remove", [notification_id],
+                              timeout=8.0)
+    if action == "clipboard_get":
+        return _termux_action(action, "termux-clipboard-get", [], timeout=8.0, parse=False)
+    if action == "clipboard_set":
+        text = _require_arg(args, "text", action)
+        if text is None:
+            return _missing_arg(action, "text", "the text to put on the clipboard")
+        # The text travels as one argv element: it is never interpreted by a shell.
+        return _termux_action(action, "termux-clipboard-set", [str(text)], timeout=8.0,
+                              parse=False)
+    if action == "media":
+        mode = str(args.get("text") or args.get("state") or "info").strip().lower()
+        if mode not in ("play", "pause", "stop", "info"):
+            return {"error": "media: pass text=play|pause|stop|info (default info), and "
+                             "path=<file> for play"}
+        argv = [mode]
+        if mode == "play":
+            path = _require_arg(args, "path", action)
+            if path is None:
+                return _missing_arg(action, "path", "the media file to play")
+            argv.append(str(path))
+        return _termux_action(action, "termux-media-player", argv, timeout=10.0)
+    if action == "media_scan":
+        path = _require_arg(args, "path", action)
+        if path is None:
+            return _missing_arg(action, "path", "the file to announce to the media scanner")
+        return _termux_action(action, "termux-media-scan", [str(path)], timeout=15.0)
+    if action == "wakelock":
+        state = str(args.get("state") or "status").strip().lower()
+        if state not in ("acquire", "release", "status"):
+            return {"error": "wakelock: state must be acquire, release or status"}
+        # Same explanation as every other phone action: a wake lock on a laptop is
+        # meaningless, and "this node is not a phone" is the honest answer rather
+        # than an adapter-level "command not found".
+        guard = _android_only(action)
+        if guard:
+            guard = dict(guard)
+            guard["command"] = "termux-wake-lock"
+            return guard
+        if _termux is None:
+            return {"available": False, "action": action,
+                    "reason": "core/termux.py is missing from this checkout"}
+        try:
+            result = _termux.wake_lock(state)
+        except Exception as exc:
+            return {"ok": False, "action": action,
+                    "reason": "%s: %s" % (type(exc).__name__, exc)}
+        payload = dict(result) if isinstance(result, dict) else {"result": result}
+        payload["action"] = action
+        payload["note"] = ("the wake lock keeps Android from freezing background work "
+                           "while the screen is off; it is ref-counted and released when "
+                           "the last job finishes")
+        return payload
+    if action == "download":
+        url = _require_arg(args, "url", action)
+        if url is None:
+            return _missing_arg(action, "url", "the URL for the system download manager")
+        return _termux_action(action, "termux-download", [str(url)], timeout=15.0)
+    if action in ("open", "share"):
+        path = _require_arg(args, "path", action)
+        url = _require_arg(args, "url", action)
+        if action == "open":
+            if path is None and url is None:
+                return _missing_arg(action, "path or url", "what to open")
+            if path is None:
+                return _termux_action(action, "termux-open-url", [str(url)], timeout=10.0)
+            return _termux_action(action, "termux-open", [str(path)], timeout=10.0)
+        if path is None:
+            return _missing_arg(action, "path", "the file to hand to Android's share sheet")
+        return _termux_action(action, "termux-share", [str(path)], timeout=20.0)
+    if action == "dialog":
+        # The dialog blocks until the user answers on the phone, so it carries its
+        # own timeout and the result says when nothing came back in time.
+        seconds = _clamp_int(args.get("timeout_sec"), 5, 120, 30)
+        argv = ["text", "-t", str(args.get("title") or "Antigravity Mesh"),
+                "-i", str(args.get("text") or "")]
+        result = _termux_action(action, "termux-dialog", argv, timeout=float(seconds) + 5.0)
+        result["note"] = ("a dialog waits for the person holding the phone; nothing is "
+                          "returned until they answer or the %ds wait expires" % seconds)
+        return result
+    if action == "wallpaper":
+        path = _require_arg(args, "path", action)
+        url = _require_arg(args, "url", action)
+        if path is None and url is None:
+            return _missing_arg(action, "path or url", "the image to set as wallpaper")
+        if path is None:
+            return _termux_action(action, "termux-wallpaper", ["-u", str(url)], timeout=20.0)
+        return _termux_action(action, "termux-wallpaper", ["-f", str(path)], timeout=20.0)
+    return {"error": "unknown action %r" % action}          # unreachable, kept total
+
+
+def _tool_device_capture(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Camera, microphone, location, fingerprint, USB and infrared."""
+    guard = _device_branch_error()
+    if guard:
+        return guard
+    action = str(args.get("action") or "").strip().lower()
+    if action not in DEVICE_CAPTURE_ACTIONS:
+        return {"error": "unknown action %r: use %s"
+                         % (action, ", ".join(DEVICE_CAPTURE_ACTIONS))}
+    # Even the listing actions are gated: they enumerate the physical sensors of a
+    # device the operator may not be holding right now.
+    guard = _read_only_refusal(action) or _action_allowed(action)
+    if guard:
+        return guard
+
+    if action == "camera_list":
+        return _termux_action(action, "termux-camera-info", [], timeout=8.0)
+    if action == "camera_photo":
+        camera_id = _clamp_int(args.get("camera_id"), 0, 9, 0)
+        path = _capture_path(args, "photo-%s.jpg" % time.strftime("%Y%m%d-%H%M%S"))
+        result = _termux_action(action, "termux-camera-photo",
+                                ["-c", camera_id, path], timeout=30.0)
+        if result.get("ok"):
+            result.update(_file_note(path))
+            result["note"] = ("the file stays on the node; share_file publishes it "
+                              "deliberately, if and when the operator asks")
+        else:
+            # The generated name is the only handle the model has on a failed
+            # attempt - it is what a retry must avoid clobbering and what a human
+            # looks for on the phone. An adapter failure (missing Termux:API, denied
+            # permission, timeout) carries no "available" key, so this must be a
+            # plain else, not a check for the guard shape.
+            result["path"] = path
+        return result
+    if action in ("mic_record_start", "mic_record_stop", "mic_record_status"):
+        path = _capture_path(args, "recording-%s.m4a" % time.strftime("%Y%m%d-%H%M%S"))
+        if action == "mic_record_status":
+            return _termux_action(action, "termux-microphone-record", ["-i"], timeout=8.0)
+        if action == "mic_record_stop":
+            return _termux_action(action, "termux-microphone-record", ["-q"], timeout=8.0)
+        argv: List[Any] = ["-f", path]
+        seconds = args.get("seconds")
+        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+            argv += ["-l", _clamp_int(seconds, 1, 3600, 60)]
+        result = _termux_action(action, "termux-microphone-record", argv, timeout=15.0)
+        if result.get("ok"):
+            result.update(_file_note(path))
+            result["note"] = ("recording runs in the Termux:API app: stop it with "
+                              "action=mic_record_stop, and keep the app in the foreground "
+                              "on Android 11+")
+        return result
+    if action == "location":
+        provider = str(args.get("provider") or "gps").strip().lower()
+        if provider not in ("gps", "network", "passive"):
+            return {"error": "provider must be gps, network or passive"}
+        result = _termux_action(action, "termux-location", ["-p", provider], timeout=25.0)
+        if result.get("ok"):
+            result["note"] = "location comes from Android; it is as precise as the grant allows"
+        return result
+    if action == "fingerprint":
+        result = _termux_action(action, "termux-fingerprint", [], timeout=60.0)
+        result["note"] = ("only the verdict is returned - no fingerprint data ever reaches "
+                          "this node or the gateway")
+        return result
+    if action == "usb_list":
+        return _termux_action(action, "termux-usb", ["-l"], timeout=10.0)
+    if action == "usb_access":
+        path = _require_arg(args, "path", action)
+        if path is None:
+            return _missing_arg(action, "path", "the device path printed by usb_list")
+        # Only the permission request is exposed: `termux-usb -e <program>` would let
+        # a model argument name an arbitrary program to execute, which this node
+        # never does. Real I/O goes through the returned descriptor in a script the
+        # operator writes and runs deliberately.
+        result = _termux_action(action, "termux-usb", ["-r", str(path)], timeout=30.0)
+        result["note"] = ("this asks Android for permission and returns the file "
+                          "descriptor; reading and writing the device is deliberately left "
+                          "to a script the operator runs themselves")
+        return result
+    if action == "infrared_frequencies":
+        return _termux_action(action, "termux-infrared-frequencies", [], timeout=8.0)
+    if action == "infrared_transmit":
+        frequency = args.get("frequency")
+        pattern = _require_arg(args, "pattern", action)
+        if not isinstance(frequency, (int, float)) or isinstance(frequency, bool):
+            return _missing_arg(action, "frequency", "the carrier frequency in Hz")
+        if pattern is None:
+            return _missing_arg(action, "pattern", "durations in microseconds, e.g. 1000,2000")
+        # Only the whitespace AROUND a separator is forgiven ("1000, 2000"): the
+        # durations themselves are one number each, so stripping every space would
+        # silently turn "1000 2000" into the single pulse "10002000".
+        cleaned = re.sub(r"\s*,\s*", ",", str(pattern).strip())
+        if not re.match(r"^\d+(,\d+)*$", cleaned):
+            return {"error": "pattern must be comma-separated integers (microseconds), "
+                             "e.g. 1000,2000"}
+        return _termux_action(action, "termux-infrared-transmit",
+                              ["-f", _clamp_int(frequency, 1, 1000000, 38000), cleaned],
+                              timeout=10.0)
+    return {"error": "unknown action %r" % action}          # unreachable, kept total
+
+
+def _tool_device_messages(args: Dict[str, Any]) -> Dict[str, Any]:
+    """SMS, call log, contacts and placing a call - private data, opt-in."""
+    guard = _device_branch_error()
+    if guard:
+        return guard
+    action = str(args.get("action") or "").strip().lower()
+    if action not in DEVICE_MESSAGES_ACTIONS:
+        return {"error": "unknown action %r: use %s"
+                         % (action, ", ".join(DEVICE_MESSAGES_ACTIONS))}
+    guard = _action_allowed(action)
+    if guard:
+        return guard
+    if not _DEVICE_PIM:
+        return {"available": False, "action": action,
+                "reason": ("messages, contacts and the call log are the operator's private "
+                           "data, so they are off until the operator enables them on the node"),
+                "fix": ("set MESH_DEVICE_PIM=1 in agent.env and restart the node; grant "
+                        "Termux:API the SMS, call-log and contacts permissions in Android "
+                        "settings")}
+    if action in ("sms_send", "call"):
+        guard = _read_only_refusal(action)
+        if guard:
+            return guard
+
+    if action == "sms_list":
+        limit = _clamp_int(args.get("limit"), 1, 50, 10)
+        argv: List[Any] = ["-l", limit]
+        if args.get("offset") is not None:
+            argv += ["-o", _clamp_int(args.get("offset"), 0, 10000, 0)]
+        if args.get("type"):
+            argv += ["-t", str(args.get("type"))]
+        return _termux_action(action, "termux-sms-list", argv, timeout=15.0)
+    if action == "sms_send":
+        number = _require_arg(args, "number", action)
+        text = _require_arg(args, "text", action)
+        if number is None:
+            return _missing_arg(action, "number", "the recipient number")
+        if text is None:
+            return _missing_arg(action, "text", "the message body")
+        return _termux_action(action, "termux-sms-send", ["-n", str(number), str(text)],
+                              timeout=20.0)
+    if action == "call_log":
+        limit = _clamp_int(args.get("limit"), 1, 50, 10)
+        argv = ["-l", limit]
+        if args.get("offset") is not None:
+            argv += ["-o", _clamp_int(args.get("offset"), 0, 10000, 0)]
+        if args.get("type"):
+            argv += ["-t", str(args.get("type"))]
+        return _termux_action(action, "termux-call-log", argv, timeout=15.0)
+    if action == "contacts":
+        # termux-contact-list has no filter of its own, so the query is applied here
+        # and the (large) answer never has to travel to the client whole.
+        result = _termux_action(action, "termux-contact-list", [], timeout=20.0)
+        if not result.get("ok"):
+            return result
+        limit = _clamp_int(args.get("limit"), 1, 50, 10)
+        query = str(args.get("query") or "").strip().lower()
+        contacts = result.get("result")
+        if not isinstance(contacts, list):
+            return result
+        if query:
+            contacts = [c for c in contacts if isinstance(c, dict)
+                        and query in json.dumps(c, ensure_ascii=False).lower()]
+        result["result"] = contacts[:limit]
+        result["total_matches"] = len(contacts)
+        return result
+    if action == "call":
+        number = _require_arg(args, "number", action)
+        if number is None:
+            return _missing_arg(action, "number", "the number to dial")
+        return _termux_action(action, "termux-telephony-call", [str(number)], timeout=15.0)
+    return {"error": "unknown action %r" % action}          # unreachable, kept total
 
 
 def _tool_get_orchestration_skill(args: Dict[str, Any]) -> Any:
@@ -1722,6 +2456,55 @@ def _pump(stream, path: str, budget: _OutputBudget) -> None:
             pass
 
 
+def _wake_lock_for_job() -> Optional[bool]:
+    """Hold Android's partial wake lock while a background job runs.
+
+    Android freezes a background app once the screen goes off, which turns a
+    perfectly healthy build into a job that never finishes. The installer's boot
+    script takes the lock once at boot, but nothing re-checks it afterwards, so a
+    job start is the honest place to make sure it is held. Returns ``True`` when a
+    lock is held for this job, ``False`` when the phone refused, and ``None`` on a
+    platform where the question does not apply.
+    """
+    if _termux is None or _device_scenario() != "termux":
+        return None
+    try:
+        result = _termux.wake_lock("acquire")
+    except Exception:
+        return False
+    return bool(result.get("held") or result.get("count"))
+
+
+#: Jobs whose wake lock has already been released in this process. Both the reaper
+#: and job_kill finalise the same job (a killed job is reaped too), and a second
+#: release is not harmless: the lock is ref-counted once per job, so releasing twice
+#: unlocks a *different, still-running* job on the same phone.
+_WAKE_LOCK_RELEASED: set = set()
+
+
+def _release_job_wake_lock(job_id: str) -> None:
+    """Release the wake lock this job took, at most once per job.
+
+    The guard lives in memory because both callers are threads of this process; the
+    metadata write only records the fact so ``job_list`` stops claiming the job
+    still holds it.
+    """
+    if _termux is None:
+        return
+    with _META_LOCK:
+        if job_id in _WAKE_LOCK_RELEASED:
+            return
+        meta = _read_json(_meta_path(job_id)) or {}
+        if not meta.get("wake_lock"):
+            return
+        _WAKE_LOCK_RELEASED.add(job_id)
+        _update_meta(job_id, wake_lock=False)
+    try:
+        _termux.wake_lock("release")
+    except Exception:
+        pass
+
+
 def _reap(job_id: str, proc: "subprocess.Popen", started_mono: float) -> None:
     """Background thread: collect a finished job and persist its result."""
     try:
@@ -1736,26 +2519,32 @@ def _reap(job_id: str, proc: "subprocess.Popen", started_mono: float) -> None:
         except Exception:
             pass
 
-    with _META_LOCK:
-        meta = _read_json(_meta_path(job_id))
-        if meta is None:
-            return
-        if meta.get("status") == "killed":
-            status = "killed"
-        else:
-            status = "done"
-        meta.update(
-            {
-                "status": status,
-                "exit_code": returncode,
-                "duration": round(time.time() - started_mono, 3),
-                "finished_at": _now_iso(),
-            }
-        )
-        try:
-            _write_json_atomic(_meta_path(job_id), meta)
-        except Exception:
-            pass
+    # The wake lock is released in a `finally`: a job that finished must not keep
+    # Android awake because its metadata could not be read back (the early return
+    # below used to leak exactly that way).
+    try:
+        with _META_LOCK:
+            meta = _read_json(_meta_path(job_id))
+            if meta is None:
+                return
+            if meta.get("status") == "killed":
+                status = "killed"
+            else:
+                status = "done"
+            meta.update(
+                {
+                    "status": status,
+                    "exit_code": returncode,
+                    "duration": round(time.time() - started_mono, 3),
+                    "finished_at": _now_iso(),
+                }
+            )
+            try:
+                _write_json_atomic(_meta_path(job_id), meta)
+            except Exception:
+                pass
+    finally:
+        _release_job_wake_lock(job_id)
 
 
 def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1808,6 +2597,10 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
         for thread in readers:
             thread.start()
         started_mono = time.time()
+        # On a phone the lock is taken for as long as this job runs and released in
+        # _reap / job_kill. It is deliberately not an argument: a model that forgot
+        # to pass it would produce a job that silently stops when the screen does.
+        wake_lock = _wake_lock_for_job()
         _JOBS[job_id] = {
             "proc": proc,
             "readers": readers,
@@ -1828,24 +2621,40 @@ def _tool_run_job(args: Dict[str, Any]) -> Dict[str, Any]:
             "finished_at": None,
             "stdout_path": stdout_path,
             "stderr_path": stderr_path,
+            "wake_lock": bool(wake_lock),
         }
         try:
             _write_json_atomic(_meta_path(job_id), meta)
         except Exception as exc:
             _JOBS.pop(job_id, None)
+            # The job never really started from the caller's point of view, so the
+            # lock taken for it must not outlive the attempt.
+            if wake_lock:
+                try:
+                    _termux.wake_lock("release")       # type: ignore[union-attr]
+                except Exception:
+                    pass
             return {"error": "failed to persist job metadata: %s" % exc}
 
         reaper = threading.Thread(target=_reap, args=(job_id, proc, started_mono), daemon=True)
         reaper.start()
         _JOBS[job_id]["reaper"] = reaper
 
-        return {
+        result = {
             "job_id": job_id,
             "pid": proc.pid,
             "pid_start": meta.get("pid_start"),
             "command": command,
             "started_at": started_at,
         }
+        if wake_lock is not None:
+            result["wake_lock"] = bool(wake_lock)
+            if not wake_lock:
+                result["wake_lock_note"] = (
+                    "Android's wake lock could not be taken, so this job may be frozen "
+                    "when the screen turns off; install Termux:API and disable battery "
+                    "optimisation for Termux (docs/TERMUX.md)")
+        return result
     except Exception as exc:
         return {"error": "run_job failed: %s" % exc}
 
@@ -1998,6 +2807,7 @@ def _tool_job_kill(args: Dict[str, Any]) -> Dict[str, Any]:
 
         if delivered:
             _update_meta(job_id, status="killed", finished_at=_now_iso(), duration=_duration_from_meta(meta))
+            _release_job_wake_lock(job_id)
         return {"ok": True, "status": "killed"}
     except Exception as exc:
         return {"error": "job_kill failed: %s" % exc}
@@ -2030,6 +2840,9 @@ def _tool_job_list(args: Dict[str, Any]) -> Dict[str, Any]:
                 "exit_code": meta.get("exit_code"),
                 "duration": meta.get("duration"),
                 "started_at": meta.get("started_at"),
+                # On a phone this says whether the job is protected from Android's
+                # background freezer while the screen is off.
+                "wake_lock": meta.get("wake_lock", None),
             })
         return {"jobs": jobs, "count": len(jobs), "total": len(metas),
                 "note": ("showing the %d most recent of %d; pass limit=<n> for more"
@@ -2159,6 +2972,20 @@ _ANNOTATIONS_DESTRUCTIVE: Dict[str, Any] = {
     "openWorldHint": False,
 }
 
+#: Camera, microphone, location, fingerprint, USB, infrared, SMS, contacts and the
+#: call log. They delete nothing, so "destructive" is not literally true - but
+#: ``destructiveHint`` is the only hint clients such as Gemini Spark reliably turn
+#: into a "confirm this action?" prompt, and these calls observe the physical world
+#: (or the private messages of the person holding the phone) without the operator
+#: necessarily watching. Marking them destructive is therefore the honest safety
+#: choice, and the README documents the trade-off.
+_ANNOTATIONS_SENSITIVE: Dict[str, Any] = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
 #: The confirmation policy, one entry per advertised tool. Classify every new tool
 #: here: a tool missing from this table stays unannotated on purpose, which means
 #: the client falls back to its default "ask first" - the safe answer for a tool
@@ -2186,6 +3013,15 @@ TOOL_ANNOTATIONS: Dict[str, Dict[str, Any]] = {
     "job_kill": _ANNOTATIONS_LOCAL_WRITE,
     "write_file": _ANNOTATIONS_LOCAL_WRITE,
     "edit_file": _ANNOTATIONS_LOCAL_WRITE,
+    # --- device branch: the node's own phone or laptop -----------------------
+    # Reading the device changes nothing, so it never prompts; the reversible
+    # actions are ordinary local work; what the physical world can observe (camera,
+    # microphone, location) and what is private to a person (messages, contacts)
+    # always asks first.
+    "device_info": _ANNOTATIONS_READ_ONLY,
+    "device_control": _ANNOTATIONS_LOCAL_WRITE,
+    "device_capture": _ANNOTATIONS_SENSITIVE,
+    "device_messages": _ANNOTATIONS_SENSITIVE,
     # --- publishing something on the internet -------------------------------
     "share_file": _ANNOTATIONS_PUBLISH,
     "serve_dir": _ANNOTATIONS_PUBLISH,
@@ -2199,20 +3035,27 @@ TOOLS: List[Dict[str, Any]] = [
         "name": "mesh_status",
         "title": "Mesh Status",
         "description": ("Confirm this node is reachable. Call this first if you think the host is "
-                        "offline; it reports live evidence from the host itself."),
+                        "offline; it reports live evidence from the host itself, plus what kind "
+                        "of machine answered (device_class, scenario) and its battery level."),
         "inputSchema": _schema({}),
     },
     {
         "name": "system_info",
         "title": "System Info",
         "description": ("One-call host summary: OS, desktop, user, home, disks, memory, load, "
-                        "top processes and the current wallpaper."),
+                        "top processes, the current wallpaper, and the device blocks - "
+                        "battery and charging, network and signal, language, time, timezone, "
+                        "CPU, RAM, storage, cameras, microphones and sensors. On a phone it "
+                        "reads Android through the termux-api commands; on a laptop it reads "
+                        "the local system. Every device block carries available/source, and a "
+                        "block the platform cannot answer says why instead of showing a zero."),
         "inputSchema": _schema({}),
     },
     {
         "name": "system_vitals",
         "title": "System Vitals",
-        "description": "Retrieve CPU, RAM and disk metrics of the local host.",
+        "description": ("Retrieve CPU, RAM and disk metrics of the local host, plus the "
+                        "battery block (and thermal sensors where the platform exposes them)."),
         "inputSchema": _schema({}),
     },
     {
@@ -2335,7 +3178,9 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "run_job",
         "title": "Run Background Job",
-        "description": "Start a command in the background; returns a job_id for job_output/job_kill.",
+        "description": "Start a command in the background; returns a job_id for job_output/job_kill. "
+                       "On an Android/Termux node the job's wake lock is taken automatically so "
+                       "Android does not freeze it while the screen is off.",
         "inputSchema": _schema(
             {
                 "command": {"type": "string", "description": "Shell command to run in the background."},
@@ -2400,6 +3245,129 @@ TOOLS: List[Dict[str, Any]] = [
             "restart": {"type": "boolean",
                         "description": "apply: restart the node afterwards (default true)."},
         }),
+    },
+    {
+        "name": "device_info",
+        "title": "Device Info",
+        "description": (
+            "One-call report for the device this node runs on: battery and charging, "
+            "network interfaces with Wi-Fi and cellular signal strength, language, time and "
+            "timezone, CPU, RAM, storage, cameras, microphones, sensors and what the platform "
+            "can actually reach. On an Android/Termux node it reads the phone through the "
+            "termux-api commands; on a laptop or desktop it reads the local system. Every "
+            "section carries available/source, so 'not exposed here' is never reported as a "
+            "zero - and on a non-phone the phone-only sections explain themselves instead of "
+            "failing. Use device_control, device_capture or device_messages to act."
+        ),
+        "inputSchema": _schema({
+            "section": {"type": "string",
+                        "enum": ["summary", "all", "device", "battery", "network", "locale",
+                                 "time", "hardware", "storage", "cameras", "microphones",
+                                 "sensors", "capabilities"],
+                        "description": "Which blocks to return (default: all)."},
+            "sensor": {"type": "string",
+                       "description": "Name one sensor to take a single live sample from "
+                                      "(Android only; needs a name from the sensors block)."},
+            "fresh": {"type": "boolean",
+                      "description": "Bypass the short-lived cache (default false)."},
+            "quick": {"type": "boolean",
+                      "description": "Skip the slow sections: network, cameras, microphones, "
+                                     "sensors (default false)."},
+        }),
+    },
+    {
+        "name": "device_control",
+        "title": "Device Control",
+        "description": (
+            "Reversible actions on the node's own device: torch, vibrate, volume, screen "
+            "brightness, text-to-speech, toast, notifications, clipboard, media playback, "
+            "media scan, wake lock, download, opening or sharing a file, a text dialog and "
+            "the wallpaper. Each action is a fixed termux-api command on Android and an "
+            "explained no-op elsewhere; the result names the command and its argv so nothing "
+            "is guessed. Nothing here is destructive, and all of it is refused when the node "
+            "runs with MESH_READ_ONLY=1."
+        ),
+        "inputSchema": _schema({
+            "action": {"type": "string",
+                       "enum": list(DEVICE_CONTROL_ACTIONS),
+                       "description": "Action to perform."},
+            "on": {"type": "boolean", "description": "torch: true lights it, false puts it out."},
+            "value": {"type": "integer",
+                      "description": "vibrate: milliseconds; volume: level 0-15; brightness: 0-255."},
+            "stream": {"type": "string", "enum": list(_DEVICE_STREAMS),
+                       "description": "volume: which audio stream (default music)."},
+            "text": {"type": "string",
+                     "description": "tts_speak/toast/notify/clipboard_set/dialog body; media: "
+                                    "play|pause|stop|info."},
+            "title": {"type": "string", "description": "notify/dialog: heading text."},
+            "id": {"type": "string",
+                   "description": "notify_remove: the id the notification was posted with."},
+            "url": {"type": "string", "description": "download/open/wallpaper: URL to use."},
+            "path": {"type": "string",
+                     "description": "open/share/media/download/media_scan/wallpaper: file on the node."},
+            "state": {"type": "string", "enum": ["acquire", "release", "status"],
+                      "description": "wakelock: what to do (default status)."},
+            "timeout_sec": {"type": "integer",
+                            "description": "dialog: seconds to wait for the person (5-120, default 30)."},
+        }, ["action"]),
+    },
+    {
+        "name": "device_capture",
+        "title": "Device Capture (asks first)",
+        "description": (
+            "Camera, microphone, location, fingerprint, USB and infrared actions. These "
+            "observe the physical world or authenticate the person holding the phone, so the "
+            "client always asks for confirmation first. A photo or a recording is written to "
+            "the node's capture directory and is never uploaded anywhere by itself; "
+            "fingerprint returns only the verdict, never biometric data; USB access requests "
+            "permission and returns the descriptor but deliberately refuses to run a program "
+            "for you; and on Android 11+ the Termux:API app has to be in the foreground for a "
+            "recording. Refused when MESH_READ_ONLY=1."
+        ),
+        "inputSchema": _schema({
+            "action": {"type": "string",
+                       "enum": list(DEVICE_CAPTURE_ACTIONS),
+                       "description": "Capture action to perform."},
+            "camera_id": {"type": "integer",
+                          "description": "camera_photo: id from camera_list (default 0)."},
+            "path": {"type": "string",
+                     "description": "camera_photo/mic_record_start: output file (default: the "
+                                    "node's capture directory); usb_access: device path from "
+                                    "usb_list."},
+            "seconds": {"type": "integer",
+                        "description": "mic_record_start: recording length limit in seconds."},
+            "provider": {"type": "string", "enum": ["gps", "network", "passive"],
+                         "description": "location: which Android provider to use (default gps)."},
+            "frequency": {"type": "integer",
+                          "description": "infrared_transmit: carrier frequency in Hz."},
+            "pattern": {"type": "string",
+                        "description": "infrared_transmit: durations in microseconds, e.g. "
+                                       "1000,2000,1000."},
+        }, ["action"]),
+    },
+    {
+        "name": "device_messages",
+        "title": "Device Messages (asks first)",
+        "description": (
+            "SMS, call log, contacts and placing a call. This is private data about the person "
+            "who owns the phone, so the client asks for confirmation AND the node refuses "
+            "until its operator enables it with MESH_DEVICE_PIM=1. The refusal names the flag "
+            "and the Android permissions to grant, so the answer is an instruction rather than "
+            "a dead end. Sending an SMS and placing a call are also refused under "
+            "MESH_READ_ONLY=1."
+        ),
+        "inputSchema": _schema({
+            "action": {"type": "string", "enum": list(DEVICE_MESSAGES_ACTIONS),
+                       "description": "Message or PIM action to perform."},
+            "number": {"type": "string", "description": "sms_send/call: recipient number."},
+            "text": {"type": "string", "description": "sms_send: message body."},
+            "limit": {"type": "integer", "description": "How many records (1-50, default 10)."},
+            "offset": {"type": "integer", "description": "Record offset, for paging."},
+            "type": {"type": "string",
+                     "description": "sms_list/call_log: filter, e.g. inbox/sent or "
+                                    "incoming/outgoing/missed."},
+            "query": {"type": "string", "description": "contacts: filter by name or number."},
+        }, ["action"]),
     },
     {
         "name": "share_file",
@@ -2485,6 +3453,10 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "mesh_update": _tool_mesh_update,
     "system_info": _tool_system_info,
     "system_vitals": _tool_system_vitals,
+    "device_info": _tool_device_info,
+    "device_control": _tool_device_control,
+    "device_capture": _tool_device_capture,
+    "device_messages": _tool_device_messages,
     "get_orchestration_skill": _tool_get_orchestration_skill,
     "list_dir": _tool_list_dir,
     "bash_exec": _tool_bash_exec,

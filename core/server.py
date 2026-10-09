@@ -468,7 +468,16 @@ class AntigravityMeshServer(object):
                         "resources": {"subscribe": False, "listChanged": False},
                     },
                     "serverInfo": {"name": self.name, "version": self.version},
-                    "instructions": "Standalone Local Antigravity Mesh Server.",
+                    # Short on purpose: the tool descriptions carry the detail. The
+                    # one thing worth saying up front is where the device branch
+                    # lives, because a phone node (Termux) is exactly the case where
+                    # a model otherwise hand-writes termux-* commands through
+                    # bash_exec instead of using the typed tools.
+                    "instructions": ("Standalone Local Antigravity Mesh Server. "
+                                     "For the device this node runs on - battery, signal, "
+                                     "time, sensors, cameras, microphones, notifications, "
+                                     "torch, volume - use device_info / device_control; "
+                                     "device_capture and device_messages ask the user first."),
                 },
             }
 

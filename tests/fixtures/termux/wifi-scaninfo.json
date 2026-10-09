@@ -1,0 +1,149 @@
+[
+  {
+    "bssid": "02:00:00:00:00:00",
+    "frequency_mhz": 2412,
+    "rssi": -75,
+    "ssid": "Neighbour-01",
+    "timestamp": 420900267390,
+    "channel_bandwidth_mhz": "20",
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:01",
+    "frequency_mhz": 5220,
+    "rssi": -77,
+    "ssid": "Neighbour-02",
+    "timestamp": 420900710481,
+    "channel_bandwidth_mhz": "80",
+    "center_frequency_mhz": 5210,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:02",
+    "frequency_mhz": 2457,
+    "rssi": -70,
+    "ssid": "Neighbour-03",
+    "timestamp": 420900668868,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2447,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:03",
+    "frequency_mhz": 2417,
+    "rssi": -73,
+    "ssid": "Neighbour-04",
+    "timestamp": 420900307406,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2427,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:04",
+    "frequency_mhz": 2437,
+    "rssi": -72,
+    "ssid": "Neighbour-05",
+    "timestamp": 420900475504,
+    "channel_bandwidth_mhz": "20",
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:05",
+    "frequency_mhz": 2457,
+    "rssi": -62,
+    "ssid": "Neighbour-06",
+    "timestamp": 420900654307,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2447,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:06",
+    "frequency_mhz": 2457,
+    "rssi": -70,
+    "ssid": "Neighbour-07",
+    "timestamp": 420900662041,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2447,
+    "capabilities": "[WPA-PSK-CCMP-128+TKIP][WPA2-PSK-CCMP-128+TKIP][RSN-PSK-CCMP-128+TKIP][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:07",
+    "frequency_mhz": 5220,
+    "rssi": -71,
+    "ssid": "Neighbour-08",
+    "timestamp": 420900697172,
+    "channel_bandwidth_mhz": "80",
+    "center_frequency_mhz": 5210,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:08",
+    "frequency_mhz": 5220,
+    "rssi": -63,
+    "ssid": "Neighbour-09",
+    "timestamp": 420901978090,
+    "channel_bandwidth_mhz": "80",
+    "center_frequency_mhz": 5210,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:09",
+    "frequency_mhz": 2457,
+    "rssi": -62,
+    "ssid": "Neighbour-10",
+    "timestamp": 420900672098,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2447,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS][WPS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:0a",
+    "frequency_mhz": 2437,
+    "rssi": -72,
+    "ssid": "Neighbour-11",
+    "timestamp": 420900483247,
+    "channel_bandwidth_mhz": "20",
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:0b",
+    "frequency_mhz": 2422,
+    "rssi": -19,
+    "ssid": "Neighbour-12",
+    "timestamp": 420900358732,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2432,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:0c",
+    "frequency_mhz": 2457,
+    "rssi": -61,
+    "ssid": "Neighbour-13",
+    "timestamp": 420900686394,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2447,
+    "capabilities": "[WPA-PSK-CCMP-128+TKIP][WPA2-PSK-CCMP-128+TKIP][RSN-PSK-CCMP-128+TKIP][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:0d",
+    "frequency_mhz": 2427,
+    "rssi": -73,
+    "ssid": "Neighbour-14",
+    "timestamp": 420900396542,
+    "channel_bandwidth_mhz": "40",
+    "center_frequency_mhz": 2437,
+    "capabilities": "[WPA2-PSK-CCMP-128+TKIP][RSN-PSK-CCMP-128+TKIP][WPA-PSK-CCMP-128+TKIP][ESS]"
+  },
+  {
+    "bssid": "02:00:00:00:00:0e",
+    "frequency_mhz": 5180,
+    "rssi": -30,
+    "ssid": "Neighbour-15",
+    "timestamp": 420900351536,
+    "channel_bandwidth_mhz": "80",
+    "center_frequency_mhz": 5210,
+    "capabilities": "[WPA2-PSK-CCMP-128][RSN-PSK-CCMP-128][ESS]"
+  }
+]

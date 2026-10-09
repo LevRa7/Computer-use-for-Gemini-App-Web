@@ -239,6 +239,61 @@ def test_advertised_confirmation_hints_match_the_node(tmp_path, monkeypatch):
     assert advertised["system_write"] == destructive
 
 
+#: The four device tools: the only advertisements whose text is pinned to the node's.
+DEVICE_TOOLS = ("device_info", "device_control", "device_capture", "device_messages")
+
+
+def _device_schema_shape(schema):
+    """The parts of a device schema the gateway must copy from the node exactly.
+
+    ``required`` is read raw instead of defaulted: the node's device_info has no
+    ``required`` key at all, and an empty list is a different advertisement.
+    """
+    return {
+        "required": schema.get("required"),
+        "additionalProperties": schema.get("additionalProperties"),
+        "properties": {
+            prop: {key: value.get(key) for key in ("type", "enum", "description")}
+            for prop, value in schema["properties"].items()
+        },
+    }
+
+
+def test_the_four_device_tools_match_the_node_field_for_field(tmp_path, monkeypatch):
+    """The device tools are the four advertisements that must be word for word.
+
+    The rest of the gateway's static list is deliberately allowed to keep older,
+    shorter prose - nobody decides anything on a reworded ``list_dir``, and forcing
+    all twenty to match would fail for reasons that are not a safety problem. The
+    device branch is different in three ways. It is new, so there is no legacy
+    wording to preserve; the node is what actually executes these actions, which
+    makes its spec the contract the client must be shown; and these four are the
+    ones a phone user's safety depends on - this exact text decides whether the
+    client stops to ask before a camera, a microphone, the location or the SMS
+    inbox, and whether a section that is merely unexposed reads as unavailable
+    rather than broken. The two tests above already compare names and confirmation
+    hints for the whole surface; this one pins the description and the schema
+    internals of these four, so a word, an enum or a property cannot drift on one
+    side only.
+    """
+    _registry(tmp_path, monkeypatch)
+    response = asyncio.run(gateway.messages_endpoint(
+        _post_request(f"/mcp?user={NODE}&token={TOKEN}",
+                      {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    ))
+    advertised = {tool["name"]: tool for tool in json.loads(response.body)["result"]["tools"]}
+    node = {spec["name"]: spec for spec in mcp_tools.TOOLS}
+
+    for name in DEVICE_TOOLS:
+        assert advertised[name]["description"] == node[name]["description"], (
+            "the description of %s is no longer the node's: the node executes the tool, "
+            "the client reads this copy" % name)
+        assert (_device_schema_shape(advertised[name]["inputSchema"])
+                == _device_schema_shape(node[name]["inputSchema"])), (
+            "the input schema of %s drifted from the node's: property names, required, "
+            "enums, types, additionalProperties and per-property descriptions must match" % name)
+
+
 def test_the_four_share_tools_are_advertised(tmp_path, monkeypatch):
     _registry(tmp_path, monkeypatch)
     response = asyncio.run(gateway.messages_endpoint(
@@ -653,3 +708,93 @@ def test_the_catch_all_still_relays_the_query_string_through_the_app(tmp_path, m
     _asgi("GET", f"/{SHARE}", b"v=3")
 
     assert fake.calls[0][2]["query"] == "v=3"
+
+
+# ---------------------------------------------------------------------------
+# (b) system_info rendering: the device blocks must reach the client
+# ---------------------------------------------------------------------------
+# The gateway prints system_info as text rather than raw JSON, and its field list
+# predates the device branch. That is a silent failure mode: the node reports a
+# battery, a signal level and a camera count, the gateway drops them, and the model
+# tells the user the node did not report them. These two tests pin the rendering
+# instead of the transport, because the transport was already covered.
+
+def _system_info_text(tmp_path, monkeypatch, result):
+    _registry(tmp_path, monkeypatch)
+    _relay(monkeypatch, result)
+    response = asyncio.run(gateway.messages_endpoint(
+        _post_request(f"/mcp?user={NODE}&token={TOKEN}",
+                      {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                       "params": {"name": "system_info", "arguments": {}}})
+    ))
+    payload = json.loads(response.body)["result"]
+    return payload["content"][0]["text"], payload["isError"]
+
+
+def test_system_info_renders_the_device_blocks_a_phone_reports(tmp_path, monkeypatch):
+    text, is_error = _system_info_text(tmp_path, monkeypatch, {
+        "hostname": "phone", "command_shell": "bash", "scenario": "termux",
+        "device": {"available": True, "class": "phone", "manufacturer": "OPPO",
+                   "model": "PHY110", "android_release": "16"},
+        "battery": {"available": True, "percent": 42, "status": "discharging",
+                    "plugged": "unplugged", "temperature_c": 31.5},
+        "network": {"available": True, "signal": "wifi Warmen5g -52 dBm",
+                    "connected_kind": "wifi", "interface_count": 2,
+                    "wifi": {"ssid": "Warmen5g", "rssi_dbm": -52},
+                    "cellular": {"operator": "Magti", "network_type": "LTE",
+                                 "signal_dbm": -101, "level": 2}},
+        "locale": {"available": True, "language": "ru", "region": "RU"},
+        "time": {"available": True, "iso_local": "2026-10-09T01:00:00+04:00",
+                 "utc_offset": "+04:00", "timezone": "Asia/Tbilisi"},
+        "hardware": {"available": True,
+                     "cpu": {"model": "Snapdragon", "cores": 8, "temp_c": 34.4},
+                     "memory": {"total_mb": 15204.0, "used_mb": 9000.0},
+                     "thermal": [{"name": "cpuss-0", "value": 33.6, "unit": "C"}]},
+        "storage": {"available": True, "root": "/", "free_gb": 41.0, "shared": "absent",
+                    "shared_fix": "run `termux-setup-storage`"},
+        "cameras": {"available": True, "count": 2,
+                    "cameras": [{"facing": "back"}, {"facing": "front"}]},
+        "microphones": {"available": False,
+                        "reason": "Android does not expose capture-device enumeration"},
+        "sensors": {"available": True, "count": 3, "sampling": "names",
+                    "sensors": ["acceleration"]},
+    })
+
+    assert is_error is False
+    for expected in ("[device] phone OPPO PHY110 16",
+                     "battery: percent=42, status=discharging, plugged=unplugged",
+                     "signal: wifi Warmen5g -52 dBm",
+                     "cellular: operator=Magti, network_type=LTE, signal_dbm=-101, level=2",
+                     "locale: language=ru, region=RU",
+                     "timezone=Asia/Tbilisi",
+                     "cpu: model=Snapdragon, cores=8, temp_c=34.4",
+                     "thermal: cpuss-0=33.6C",
+                     "storage: root=/, free_gb=41.0, shared=absent",
+                     "cameras: count=2 (back, front)",
+                     "sensors: count=3, sampling=names"):
+        assert expected in text, "the rendered report dropped %r" % expected
+    # An unavailable block says so, with its reason: "not exposed here" and "0 %"
+    # must never look the same to a model.
+    assert "microphones: not available - Android does not expose capture-device enumeration" in text
+
+
+def test_system_info_renders_one_cause_for_a_silent_termux_api(tmp_path, monkeypatch):
+    text, _ = _system_info_text(tmp_path, monkeypatch, {
+        "hostname": "phone",
+        "device_hint": ("2 sections timed out (battery, network). On an Android node that is "
+                        "usually one cause: the Termux:API app is not installed"),
+        "battery": {"available": False, "reason": "termux-battery-status timed out after 4.0s",
+                    "fix": "open the Termux:API app once"},
+        "capabilities": {"available": True,
+                         "termux_api": {"installed": True, "missing": ["termux-sensor"]},
+                         "app_reachable": False, "app_fix": "open the Termux:API app once",
+                         "permissions": {"camera": "denied", "microphone": "unknown"}},
+    })
+
+    assert "sections timed out" in text, "the single root cause must be visible"
+    assert "battery: not available - termux-battery-status timed out after 4.0s" in text
+    assert "(fix: open the Termux:API app once)" in text
+    assert "termux-api: installed=True" in text
+    assert "termux-api missing: termux-sensor" in text
+    assert "termux-api app: not answering" in text
+    assert "permissions denied: camera" in text

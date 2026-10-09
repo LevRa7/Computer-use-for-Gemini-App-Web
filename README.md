@@ -41,6 +41,7 @@ Just ask Gemini in plain language, from anywhere:
 - *"Fix the typo in config.yaml and restart the service"*
 - *"Start a full backup in the background and tell me when it's done"*
 - *"How much free disk space is left on my laptop?"*
+- *"Turn on the phone's torch, and tell me its battery level and signal"*
 
 No SSH client, no terminal on your phone, no VPN — only a chat.
 
@@ -51,9 +52,9 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 | | |
 | :--- | :--- |
 | 📱 **Mobile-first agent** | Works in the official Gemini mobile app and on the web through Gemini Spark. |
-| 🖥️ **Any PC** | Linux, macOS, Windows — desktops, laptops, VPS, containers. |
+| 🖥️ **Any PC** | Linux, macOS, Windows — desktops, laptops, VPS, containers. **Android phones and tablets** run the same node inside Termux. |
 | 🌐 **Behind any NAT** | The node opens an *outbound* WebSocket tunnel. No public IP, no port forwarding, no router setup. |
-| ⚡ **One-line install** | Detects OS, architecture and device type; installs autostart (`systemd` / `launchd` / Windows task); copies your connection link to the clipboard. |
+| ⚡ **One-line install** | Detects OS, architecture and device type; installs autostart (`systemd` / `launchd` / Windows task / runit + Termux:Boot on Android); copies your connection link to the clipboard. |
 | 🛡️ **Token-gated** | Every call needs a personal 128-bit token (`?token=…` or `Authorization: Bearer`). Everything else gets HTTP 401. |
 | 🔁 **Many machines, one gateway** | Each node is addressed by `?user=<node-name>` on one shared domain. |
 | 🆓 **Free & open source** | MIT license, works with the free Gemini tier. |
@@ -62,7 +63,7 @@ No SSH client, no terminal on your phone, no VPN — only a chat.
 
 ## 🛠️ What Gemini can do on your machine (MCP tools)
 
-**22 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
+**26 tools.** Every one of them runs on your machine under your own user account — the gateway only carries the calls.
 
 ### Which calls ask for your confirmation
 
@@ -70,9 +71,12 @@ Gemini Spark decides whether to stop and ask *"confirm this action?"* from the *
 
 | Class | Tools | Confirmation |
 | :--- | :--- | :--- |
-| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | never asked |
-| Local work — commands, builds, file writes, jobs, shares | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir` | not asked |
+| Read-only | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `device_info` | never asked |
+| Local work — commands, builds, file writes, jobs, shares, device actions | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `device_control` | not asked |
+| **Sensitive — observes the physical world or a person's private data** | `device_capture` (camera, microphone, location, fingerprint, USB, infrared), `device_messages` (SMS, call log, contacts, calls) | **asked first** |
 | **Confirmed — install/delete, `sudo`, system paths** | `system_change` (installs/removes software, deletes data, runs `sudo`, edits system paths by shell), `system_write` (writes file content into a system path), `mesh_update` (installs a release), `unshare` (revokes and deletes the published copy) | **asked first** |
+
+`device_capture` and `device_messages` delete nothing, yet they are advertised with `destructiveHint`. That hint is the only one clients such as Gemini Spark reliably turn into a *"confirm this action?"* prompt, and a camera, a microphone or an SMS list that fires silently is worse than an honest over-classification. They were put in that class deliberately. `device_control` stays ordinary local work for the same reason: marking a torch or a vibrate as destructive would only train you to click through the prompts that matter.
 
 Four classes are gated, and the gateway — not the hint — enforces them, because a hint is static per tool and cannot tell `ls` from `apt install`:
 
@@ -83,7 +87,7 @@ Four classes are gated, and the gateway — not the hint — enforces them, beca
 
 `bash_exec`/`run_job` refuse such commands and tell the model to re-issue them as `system_change`; `write_file`/`edit_file` refuse a system path and point at `system_write` (which takes the exact content, so there is no shell quoting to get wrong). The gate is moved, not removed — inspection, builds, tests, config edits in your projects and the like still run without a dialog.
 
-The tool surface and the confirmation policy live in [gateway.py](gateway.py) (annotations, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) and in [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` for the node's own surface); tests compare the two surfaces and pin the classifier, so a gated command cannot slip through.
+The tool surface and the confirmation policy live in [gateway.py](gateway.py) (annotations, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) and in [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` for the node's own surface, which also carries the device branch's four tools); tests compare the two surfaces and pin the classifier, so a gated command cannot slip through.
 
 > [!NOTE]
 > The classifier matches a verb at the start of a command segment (after `sudo`/`env`/`timeout`/`powershell -Command` prefixes), so `echo "rm -rf /"` or `grep rm notes.txt` still run, while `curl … | bash` counts as an install. It is a UX gate, not a sandbox: for hard guarantees independent of any prompt use the node's own switches — `MESH_READ_ONLY=1` and `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
@@ -92,9 +96,9 @@ The tool surface and the confirmation policy live in [gateway.py](gateway.py) (a
 
 | Tool | What it does |
 | :--- | :--- |
-| `mesh_status()` | Confirms the node is reachable, with live evidence from the host itself. Call it first if the machine looks offline. |
-| `system_info()` | One-call host summary: OS, desktop, user, home, disks, memory, load, top processes, the current wallpaper, and `command_shell` — the shell `bash_exec` will actually use. |
-| `system_vitals()` | CPU, RAM and disk metrics. |
+| `mesh_status()` | Confirms the node is reachable, with live evidence from the host itself: what kind of machine answered (`device_class`, `scenario`) and its `battery_percent`. Call it first if the machine looks offline. |
+| `system_info()` | One-call host summary: OS, desktop, user, home, disks, memory, load, top processes, the current wallpaper, `command_shell` — the shell `bash_exec` will actually use — and the device blocks: battery and charging, network and signal, language, time and timezone, CPU, RAM, storage, cameras, microphones and sensors. |
+| `system_vitals()` | CPU, RAM and disk metrics, plus the battery block and the thermal sensors the platform exposes. |
 
 ### Shell
 
@@ -124,10 +128,48 @@ The tool surface and the confirmation policy live in [gateway.py](gateway.py) (a
 
 | Tool | What it does |
 | :--- | :--- |
-| `run_job(command, cwd)` | Starts a command in the background and returns a `job_id`. |
+| `run_job(command, cwd)` | Starts a command in the background and returns a `job_id`. On an Android node it takes the wake lock for the lifetime of the job, so Android does not freeze it when the screen goes off. |
 | `job_output(job_id, wait_ms, max_chars, cursor)` | Reads a job's output, optionally waiting up to 20 s for completion. Paginated. |
 | `job_kill(job_id, signal)` | Terminates a job. `signal` is `TERM` (default), `KILL`, `INT`, `HUP` or `QUIT`. |
-| `job_list(limit)` | Lists recent jobs, newest first (20 by default, max 50). |
+| `job_list(limit)` | Lists recent jobs, newest first (20 by default, max 50), including whether each one holds a `wake_lock`. |
+
+### Device (phone, laptop or server)
+
+These four tools read and act on the device the node itself runs on. They are advertised on **every** node — a phone-only action on a laptop answers with `available: false`, the reason and, where one exists, the fix, instead of failing.
+
+| Tool | What it does |
+| :--- | :--- |
+| `device_info(section, sensor, fresh, quick)` | One-call device report: battery and charging, network interfaces with Wi-Fi and cellular signal, language, time and timezone, CPU, RAM, storage, cameras, microphones, sensors and what the platform can actually reach. `section` is `summary`, `all` (default) or one of `device`, `battery`, `network`, `locale`, `time`, `hardware`, `storage`, `cameras`, `microphones`, `sensors`, `capabilities`. `sensor` takes one live sample from a named sensor (Android; the name comes from the `sensors` block), `fresh` bypasses the few-second cache and `quick` skips the slow sections. Every block carries `available` and `source`; a block the platform cannot answer says why instead of showing a zero. |
+| `device_control(action, on, value, stream, text, title, id, url, path, state, timeout_sec)` | Twenty reversible actions: `torch`, `vibrate`, `volume`, `volume_get`, `brightness`, `tts_speak`, `toast`, `notify`, `notify_list`, `notify_remove`, `clipboard_get`, `clipboard_set`, `media`, `media_scan`, `wakelock`, `download`, `open`, `share`, `dialog`, `wallpaper`. `value` is milliseconds for `vibrate`, a 0–15 level for `volume` and 0–255 for `brightness`; `stream` picks the audio stream (`music` by default); `text` is the body for TTS, toast, notification, clipboard and dialog, and `play\|pause\|stop\|info` for `media`. Nothing here is destructive. |
+| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Eleven actions: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **Asks first.** `path` is the output file for `camera_photo` and `mic_record_start` (default: the node's capture directory) and the device path from `usb_list` for `usb_access`; `camera_id` comes from `camera_list`, `seconds` limits a recording, `provider` is `gps`, `network` or `passive`, and `frequency`/`pattern` drive `infrared_transmit`. A photo or a recording stays in the capture directory and is never uploaded by itself — `share_file` publishes it only when you ask for that. `fingerprint` returns only the verdict; `usb_access` asks Android for permission and returns the descriptor but deliberately refuses to run a program for you. |
+| `device_messages(action, number, text, limit, offset, type, query)` | Five actions: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **Asks first, and is off until the operator enables it with `MESH_DEVICE_PIM=1`** — it is the private data of whoever holds the phone. `limit` is 1–50 (default 10), `offset` pages through the list, `type` filters it and `query` filters contacts on the node. |
+
+Example:
+
+```text
+"Check the phone's battery and signal."
+  → device_info(section="summary")
+
+"Turn on the torch."
+  → device_control(action="torch", on=true)
+
+"Take a photo and share it with me."
+  → device_capture(action="camera_photo")   # asks for confirmation
+  → share_file(path=<the path it returned>)
+```
+
+### Device switches (operator)
+
+Read from `agent.env` at startup ([core/agent.py](core/agent.py), applied in [core/mcp_tools.py](core/mcp_tools.py) and [core/device.py](core/device.py)):
+
+| Variable | Default | What it does |
+| :--- | :--- | :--- |
+| `MESH_DEVICE` | `auto` | `auto` keeps the branch answering everywhere (only the answer differs per platform), `0` switches the branch off, `1` forces it on. |
+| `MESH_DEVICE_ACTIONS` | empty | Comma-separated allowlist of action names for `device_control`, `device_capture` and `device_messages`; empty means every action the build implements. |
+| `MESH_DEVICE_CAPTURE_DIR` | shared storage on a phone once `termux-setup-storage` has been granted (`~/storage/dcim/antigravity-mesh` or `~/storage/shared/AntigravityMesh`), otherwise `~/.cache/antigravity-mesh/captures` | Where photos and recordings are written. |
+| `MESH_DEVICE_PIM` | `0` | `1` enables SMS, the call log, contacts and placing a call. |
+| `MESH_DEVICE_QUICK` | `0` | `1` keeps `system_info` instant by skipping network, cameras, microphones and sensors. |
+| `MESH_READ_ONLY` | `0` | `1` refuses every `device_control` and `device_capture` action, and blocks `sms_send` and `call`. This is the node-side guarantee that does not depend on any client prompt. |
 
 ### Publishing files and web pages
 
@@ -171,6 +213,13 @@ These four make something on your machine readable from the internet. The link i
 ```bash
 curl -fsSL https://smart-server.online/install.sh | bash
 ```
+
+**📱 Android (Termux)** — no root, works from F-Droid's Termux
+```bash
+curl -fsSL https://smart-server.online/install.sh | bash
+```
+Autostart on a phone is a runit service plus the Termux:Boot app, and the node is
+named after the device model — see [docs/TERMUX.md](docs/TERMUX.md).
 
 **🪟 Windows (PowerShell)**
 ```powershell
@@ -227,6 +276,8 @@ That's it — Gemini is now an agent running on your machine. Repeat step 1 on o
 
 On Windows the same variants are available in the visual installer (`.\install-gui.cmd`); local standalone stays console-only there (`.\install.ps1 -Mode standalone -Port 8096`).
 
+On **Android/Termux** the same `./install.sh` variants work; autostart is a runit service plus the Termux:Boot app instead of systemd, and standalone stays reachable from that phone alone — see [docs/TERMUX.md](docs/TERMUX.md).
+
 ---
 
 ## 🪟 Windows installation
@@ -239,6 +290,42 @@ Windows already ships PowerShell 5.1, so there is nothing to prepare — no Pyth
 | Needs | nothing but PowerShell | a clone or an unpacked release — it drives `install.ps1`, `core/` and `install.sh` |
 | Variants | `-Mode tunnel` (default), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Quick setup, Custom setup, Remote over SSH |
 | Language | `-Lang en` / `-Lang ru` | switch in the window header, or `-Lang` |
+
+### Automatic dependencies and architecture
+
+Nothing has to be prepared by hand first. Both installers obtain what they need, and if
+they cannot, they stop with an explicit message instead of writing an autostart entry that
+can never work.
+
+| | Windows (`install.ps1`) | Linux / macOS (`install.sh`) |
+| :--- | :--- | :--- |
+| Python | `winget` → the python.org installer for **this** architecture → `uv` | `apt` / `dnf` / `yum` / `zypper` / `pacman` / `apk` / `xbps` / `brew` → `uv` |
+| `websockets` | `pip` → `pip --user` → `ensurepip` → `uv` → a venv | `pip` → `pip --break-system-packages` → `pip --user` → `ensurepip` → `uv` → a venv |
+| If all of that fails | stops, and prints the exact command to run | stops, and prints the exact command to run |
+
+`websockets` is the only external Python requirement: `core/mcp_tools.py` and
+`core/server.py` are standard library only. `uv` is fetched only when the cheaper paths
+have already failed.
+
+**The architecture decides which build is downloaded.** The installer asks the *OS*, not
+the process, because a 32-bit PowerShell on 64-bit Windows reports `x86` and hides the
+real value in `PROCESSOR_ARCHITEW6432`, and an emulated x64 process on ARM64 reports
+`AMD64`:
+
+| Machine | Python build | `uv` archive |
+| :--- | :--- | :--- |
+| Windows x64 | `python-3.12.5-amd64.exe` | `x86_64-pc-windows-msvc` |
+| Windows ARM64 | `python-3.12.5-arm64.exe` | `aarch64-pc-windows-msvc` |
+| Windows 32-bit | `python-3.12.5.exe` | — (uv ships no 32-bit Windows build) |
+| Linux `x86_64` | the package manager's own build | `x86_64-unknown-linux-gnu` |
+| Linux `aarch64` | the package manager's own build | `aarch64-unknown-linux-gnu` |
+| Linux `armv7l` / `i686` | the package manager's own build | `armv7-unknown-linux-gnueabihf` / `i686-unknown-linux-gnu` |
+| macOS `arm64` / `x86_64` | `brew`, or `uv` | `aarch64-apple-darwin` / `x86_64-apple-darwin` |
+
+The interpreter that ends up pinned is the one that actually has `websockets` — which can
+be a venv or a `uv`-managed CPython, both deliberately outside `PATH`. `install.ps1 -DryRun`
+and `install.sh --dry-run` report the architecture without changing anything, and the visual
+installer shows it in its preflight.
 
 ### Download the setup executable
 
@@ -278,6 +365,7 @@ Full details, screenshots and the SSH notes: [docs/GUI_INSTALLER.md](docs/GUI_IN
 | Path | What it is |
 | :--- | :--- |
 | `%USERPROFILE%\.config\antigravity-mesh\agent.env` | `MESH_GATEWAY`, `MESH_USER`, `MESH_TOKEN` |
+| `%USERPROFILE%\.config\antigravity-mesh\domain.env` | `MESH_PUBLIC_URL` — the resolved shared domain, so the node's share links, its tunnel and the gateway name the same host (not written when the built-in default is all that is configured) |
 | `…\Start Menu\Programs\Startup\antigravity-agent.vbs` | autostart entry, so the node comes back after a reboot |
 | `%USERPROFILE%\.config\antigravity-mesh\agent.log` | agent output, for when a silent autostart fails |
 
@@ -301,6 +389,52 @@ The wizard does not offer it; use the console installer:
 ```
 
 That starts a local-only FastMCP server at `http://localhost:8096/sse` and puts that URL on the clipboard.
+
+---
+
+## 📱 Android installation (Termux)
+
+The same `install.sh` installs a node on an unrooted phone or tablet, and the phone
+then shows up in Gemini Spark like any other machine. Full guide:
+**[docs/TERMUX.md](docs/TERMUX.md)**.
+
+```bash
+# 1. Termux from F-Droid (not Google Play); optionally Termux:Boot and Termux:API
+pkg update -y
+# 2. the usual one-liner
+curl -fsSL https://smart-server.online/install.sh | bash
+```
+
+What a phone changes, and how the installer handles it:
+
+| | |
+| :--- | :--- |
+| **Packages** | `pkg` instead of `apt`, `python`/`python-pip` instead of `python3-pip`/`python3-venv` — a phone is never root and has no `sudo`. |
+| **Node name** | The device model (`Pixel 7 Pro` → `pixel7pro`): Android answers `localhost` to every app, and the gateway keeps one tunnel per name. |
+| **Domain file** | `~/.config/antigravity-mesh/domain.env` — there is no `/etc` to write to. The installer records the resolved shared domain there, so the phone's share links, its tunnel and the gateway name the same host (the built-in default is never recorded). |
+| **Autostart** | A **runit** service (`termux-services`, the `Restart=always` equivalent) plus a **Termux:Boot** script that takes the wake lock after a reboot. |
+| **Clipboard** | `termux-clipboard-set` (Termux:API), so the MCP link goes straight into the Gemini app. |
+
+> [!IMPORTANT]
+> Two Android-side switches are yours to flip: install **Termux:Boot** and open it
+> once, and set battery optimisation to *Unrestricted* for Termux. Without them
+> Android unloads the node with the screen off.
+
+The phone must also be able to **resolve the gateway name**. A gateway that lives on
+a private network (Tailscale, a VPN, a DNS override on your laptop) resolves there and
+nowhere else — mobile data resolves nothing private. Put the phone on that network, or
+give the gateway a publicly resolvable domain; the installer detects a name it cannot
+resolve and says so before writing anything: see
+[docs/TERMUX.md](docs/TERMUX.md#private-gateway-tailscale--vpn).
+
+```bash
+sv status agy-agent                       # is it up?
+sv restart agy-agent                      # restart now
+tail -f $PREFIX/var/log/sv/agy-agent/current
+```
+
+`--mode=standalone` also works, but it serves `127.0.0.1` only — reachable from
+inside that phone alone. Use the default tunnel mode to drive the phone from Gemini.
 
 ---
 
@@ -356,6 +490,9 @@ Why: every extra hostname would need its own DNS record *and* its own SAN in the
 
 - The shared domain defaults to `smart-server.online`; override it with `./install.sh --domain=<shared-domain>` (node side) or `MESH_PUBLIC_URL` (gateway side).
 - Legacy per-device subdomain URLs still resolve for backwards compatibility and log a deprecation warning; set `MESH_LEGACY_SUBDOMAIN=0` on the gateway to reject them outright.
+- The installer now records the domain it resolved in the domain file, so the node's share links, its tunnel and the gateway all name the same host: `MESH_PUBLIC_URL=https://<shared-domain>` in `domain.env`, written in both install branches (standalone, and cloud-gateway/tunnel right after `agent.env`). The value is normalised first, the `__MESH_DOMAIN__` placeholder and an empty value are never written, the write is skipped when the file already names that host, and a file that cannot be written is not fatal — the installer prints the exact command to run by hand. The built-in default is never recorded at all: it is a fallback, not a configuration, and pinning it would stop `core/domain.py` from consulting the legacy `MESH_GATEWAY` at all, so a later change in `agent.env` would be silently ignored — nothing is lost, because with no file that same value is already the resolver's last fallback. `--dry-run` reports the file and the value it would write — including `not written (the built-in default is a fallback, not a configuration)` — and still changes nothing on disk.
+- Why this matters: share links are built by `core/domain.py`, whose chain is `MESH_PUBLIC_URL` → `AGY_PUBLIC_BASE_URL` → the domain file → the built-in default, and which deliberately never reads the legacy `MESH_GATEWAY` that `agent.env` carries (only `gateway_host()`, the tunnel host, does). A node installed the normal way — `agent.env` with `MESH_GATEWAY`/`MESH_USER`/`MESH_TOKEN` and no domain file — therefore dialled the right gateway while minting links on the built-in default. On an already-installed node, re-run the installer or write the one line by hand: `mkdir -p ~/.config/antigravity-mesh && echo 'MESH_PUBLIC_URL=https://<domain>' > ~/.config/antigravity-mesh/domain.env`, or the same with `sudo tee /etc/antigravity-mesh/domain.env` on Linux. Existing share links keep working; new ones use the configured domain.
+- `MESH_DOMAIN_FILE` only overrides the *path*, and it belongs to the node's own configuration rather than to the installer invocation: keep it in `agent.env` (every `MESH_*` key there is exported to the node), or the domain is written into a file the node never reads. The installer creates the parent directory of whichever file is in effect. Over `--ssh=<host>` the domain resolved here is handed to the remote `install.sh` as `--domain=`, so the target records that host instead of re-resolving it (a repository copy still carrying the `__MESH_DOMAIN__` placeholder would otherwise fall back to the built-in default).
 
 ---
 
@@ -454,6 +591,7 @@ Gemini в браузере или на телефоне умеет разгов�
 - *«Исправь опечатку в config.yaml и перезапусти сервис»*
 - *«Запусти полный бэкап в фоне и сообщи, когда закончится»*
 - *«Сколько свободного места осталось на ноутбуке?»*
+- *«Включи фонарик на телефоне и скажи уровень заряда и сигнал»*
 
 Без SSH-клиента, без терминала на телефоне, без VPN — только чат.
 
@@ -475,7 +613,7 @@ Gemini в браузере или на телефоне умеет разгов�
 
 ## 🛠️ Что Gemini может делать на вашей машине (MCP-инструменты)
 
-**22 инструмента.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
+**26 инструментов.** Все они выполняются на вашей машине под вашей учётной записью — шлюз только передаёт вызовы.
 
 ### На какие вызовы Gemini спросит подтверждение
 
@@ -483,9 +621,12 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Класс | Инструменты | Подтверждение |
 | :--- | :--- | :--- |
-| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list` | не запрашивается |
-| Локальная работа — команды, сборки, запись файлов, задачи, публикации | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir` | не запрашивается |
+| Только чтение | `mesh_status`, `system_info`, `system_vitals`, `get_orchestration_skill`, `list_dir`, `read_file`, `grep_search`, `glob_find`, `job_output`, `job_list`, `share_list`, `device_info` | не запрашивается |
+| Локальная работа — команды, сборки, запись файлов, задачи, публикации, действия с устройством | `bash_exec`, `run_job`, `write_file`, `edit_file`, `job_kill`, `share_file`, `serve_dir`, `device_control` | не запрашивается |
+| **Чувствительные — наблюдают за физическим миром или личными данными** | `device_capture` (камера, микрофон, местоположение, отпечаток, USB, ИК-порт), `device_messages` (SMS, журнал вызовов, контакты, звонки) | **запрашивается** |
 | **Подтверждаемые — установка/удаление, `sudo`, системные пути** | `system_change` (установка/удаление ПО, удаление данных, `sudo`, правка системных путей через оболочку), `system_write` (запись файла в системный путь), `mesh_update` (устанавливает релиз), `unshare` (отзывает и удаляет опубликованную копию) | **запрашивается** |
+
+`device_capture` и `device_messages` ничего не удаляют, но объявлены с `destructiveHint`. Эта подсказка — единственная, которую клиенты вроде Gemini Spark надёжно превращают в вопрос *«подтвердить действие?»*, а молча сработавшая камера, микрофон или список SMS хуже честной перестраховки. В этот класс они отнесены намеренно. `device_control` по той же причине остаётся обычной локальной работой: пометить так фонарик или вибрацию — значит приучить вас закрывать те диалоги, которые действительно важны.
 
 Под барьером четыре класса, и следит за ними шлюз, а не подсказка: подсказка статична на инструмент и не отличает `ls` от `apt install`.
 
@@ -496,7 +637,7 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 `bash_exec`/`run_job` отклоняют такие команды и предлагают переоформить их как `system_change`; `write_file`/`edit_file` отклоняют системный путь и направляют в `system_write` (он принимает точное содержимое, поэтому экранировать ничего не нужно). Барьер не убран, а перенесён: осмотр, сборки, тесты, правка конфигов в ваших проектах идут без диалога.
 
-Поверхность инструментов и политика подтверждений живут в [gateway.py](gateway.py) (аннотации, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) и в [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` для собственной поверхности узла); тесты сравнивают обе поверхности и фиксируют классификатор, чтобы закрытая команда не просочилась.
+Поверхность инструментов и политика подтверждений живут в [gateway.py](gateway.py) (аннотации, `INSTALL_COMMAND_PATTERNS` / `DELETE_COMMAND_PATTERNS`, `SYSTEM_PATH_RE`, `classify_command()`) и в [core/mcp_tools.py](core/mcp_tools.py) (`TOOL_ANNOTATIONS` для собственной поверхности узла, включая четыре инструмента ветки устройства); тесты сравнивают обе поверхности и фиксируют классификатор, чтобы закрытая команда не просочилась.
 
 > [!NOTE]
 > Классификатор ищет глагол в начале сегмента команды (после префиксов `sudo`/`env`/`timeout`/`powershell -Command`), поэтому `echo "rm -rf /"` или `grep rm notes.txt` выполняются как раньше, а `curl … | bash` считается установкой. Это UX-барьер, а не песочница: жёсткая гарантия — переключатели узла `MESH_READ_ONLY` и `MESH_WRITE_ROOTS` ([core/agent.py](core/agent.py)).
@@ -505,9 +646,9 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Инструмент | Что делает |
 | :--- | :--- |
-| `mesh_status()` | Подтверждает, что узел доступен, живыми данными с самого хоста. Вызывать первым, если машина кажется offline. |
-| `system_info()` | Сводка о хосте одним вызовом: ОС, рабочий стол, пользователь, домашний каталог, диски, память, загрузка, топ процессов, текущие обои и `command_shell` — та оболочка, которую реально использует `bash_exec`. |
-| `system_vitals()` | Метрики CPU, ОЗУ и дисков. |
+| `mesh_status()` | Подтверждает, что узел доступен, живыми данными с самого хоста: что за машина ответила (`device_class`, `scenario`) и её `battery_percent`. Вызывать первым, если машина кажется offline. |
+| `system_info()` | Сводка о хосте одним вызовом: ОС, рабочий стол, пользователь, домашний каталог, диски, память, загрузка, топ процессов, текущие обои, `command_shell` — та оболочка, которую реально использует `bash_exec`, — и блоки устройства: батарея и зарядка, сеть и сигнал, язык, время и часовой пояс, CPU, ОЗУ, накопитель, камеры, микрофоны и датчики. |
+| `system_vitals()` | Метрики CPU, ОЗУ и дисков, плюс блок батареи и термические датчики, которые отдаёт платформа. |
 
 ### Оболочка
 
@@ -537,10 +678,48 @@ Gemini Spark решает, останавливаться ли с вопросо
 
 | Инструмент | Что делает |
 | :--- | :--- |
-| `run_job(command, cwd)` | Запускает команду в фоне и возвращает `job_id`. |
+| `run_job(command, cwd)` | Запускает команду в фоне и возвращает `job_id`. На Android-узле берёт wake lock на всё время задачи, чтобы Android не заморозил её при выключенном экране. |
 | `job_output(job_id, wait_ms, max_chars, cursor)` | Читает вывод задачи, при желании ожидая завершения до 20 с. Постранично. |
 | `job_kill(job_id, signal)` | Завершает задачу. `signal` — `TERM` (по умолчанию), `KILL`, `INT`, `HUP` или `QUIT`. |
-| `job_list(limit)` | Список последних задач, новые сверху (20 по умолчанию, максимум 50). |
+| `job_list(limit)` | Список последних задач, новые сверху (20 по умолчанию, максимум 50), с признаком `wake_lock` у каждой. |
+
+### Устройство (телефон, ноутбук или сервер)
+
+Эти четыре инструмента читают само устройство, на котором работает узел, и управляют им. Они объявлены на **каждом** узле — действие для телефона на ноутбуке отвечает `available: false`, причиной и, где она есть, подсказкой `fix`, а не отказом.
+
+| Инструмент | Что делает |
+| :--- | :--- |
+| `device_info(section, sensor, fresh, quick)` | Отчёт об устройстве одним вызовом: батарея и зарядка, сетевые интерфейсы с уровнем Wi-Fi и сотового сигнала, язык, время и часовой пояс, CPU, ОЗУ, накопитель, камеры, микрофоны, датчики и то, до чего платформа реально дотягивается. `section` — `summary`, `all` (по умолчанию) или один из `device`, `battery`, `network`, `locale`, `time`, `hardware`, `storage`, `cameras`, `microphones`, `sensors`, `capabilities`. `sensor` берёт один живой замер с датчика по имени (Android; имя — из блока `sensors`), `fresh` обходит короткий кэш, `quick` пропускает медленные разделы. У каждого блока есть `available` и `source`; блок, на который у платформы нет ответа, говорит причину, а не показывает ноль. |
+| `device_control(action, on, value, stream, text, title, id, url, path, state, timeout_sec)` | Двадцать обратимых действий: `torch`, `vibrate`, `volume`, `volume_get`, `brightness`, `tts_speak`, `toast`, `notify`, `notify_list`, `notify_remove`, `clipboard_get`, `clipboard_set`, `media`, `media_scan`, `wakelock`, `download`, `open`, `share`, `dialog`, `wallpaper`. `value` — миллисекунды для `vibrate`, уровень 0–15 для `volume` и 0–255 для `brightness`; `stream` выбирает аудиопоток (`music` по умолчанию); `text` — тело для TTS, toast, уведомления, буфера обмена и диалога, а для `media` — `play\|pause\|stop\|info`. Ничего деструктивного здесь нет. |
+| `device_capture(action, camera_id, path, seconds, provider, frequency, pattern)` | Одиннадцать действий: `camera_list`, `camera_photo`, `mic_record_start`, `mic_record_stop`, `mic_record_status`, `location`, `fingerprint`, `usb_list`, `usb_access`, `infrared_frequencies`, `infrared_transmit`. **Спрашивает подтверждение.** `path` задаёт выходной файл для `camera_photo` и `mic_record_start` (по умолчанию — каталог съёмки узла) и путь устройства из `usb_list` для `usb_access`; `camera_id` берётся из `camera_list`, `seconds` ограничивает запись, `provider` — `gps`, `network` или `passive`, а `frequency`/`pattern` — для `infrared_transmit`. Фото и запись остаются в каталоге съёмки и сами никуда не отправляются — `share_file` публикует файл только по отдельной просьбе. `fingerprint` возвращает только вердикт; `usb_access` запрашивает у Android разрешение и отдаёт дескриптор, но намеренно отказывается запускать программу за вас. |
+| `device_messages(action, number, text, limit, offset, type, query)` | Пять действий: `sms_list`, `sms_send`, `call_log`, `contacts`, `call`. **Спрашивает подтверждение и выключен, пока оператор не включит его через `MESH_DEVICE_PIM=1`** — это личные данные того, у кого телефон в руках. `limit` — 1–50 (по умолчанию 10), `offset` листает список, `type` фильтрует его, а `query` фильтрует контакты на узле. |
+
+Пример:
+
+```text
+«Проверь батарею и сигнал на телефоне».
+  → device_info(section="summary")
+
+«Включи фонарик».
+  → device_control(action="torch", on=true)
+
+«Сделай фото и поделись им со мной».
+  → device_capture(action="camera_photo")   # спрашивает подтверждение
+  → share_file(path=<путь, который он вернул>)
+```
+
+### Переключатели устройства (оператор)
+
+Читаются из `agent.env` при запуске ([core/agent.py](core/agent.py), применяются в [core/mcp_tools.py](core/mcp_tools.py) и [core/device.py](core/device.py)):
+
+| Переменная | По умолчанию | Что делает |
+| :--- | :--- | :--- |
+| `MESH_DEVICE` | `auto` | `auto` — ветка отвечает везде (различается только ответ), `0` — выключает ветку, `1` — включает принудительно. |
+| `MESH_DEVICE_ACTIONS` | пусто | Список разрешённых имён действий через запятую для `device_control`, `device_capture` и `device_messages`; пусто — все действия, реализованные сборкой. |
+| `MESH_DEVICE_CAPTURE_DIR` | общее хранилище телефона после `termux-setup-storage` (`~/storage/dcim/antigravity-mesh` или `~/storage/shared/AntigravityMesh`), иначе `~/.cache/antigravity-mesh/captures` | Куда пишутся фото и записи. |
+| `MESH_DEVICE_PIM` | `0` | `1` включает SMS, журнал вызовов, контакты и звонок. |
+| `MESH_DEVICE_QUICK` | `0` | `1` оставляет `system_info` мгновенным, пропуская сеть, камеры, микрофоны и датчики. |
+| `MESH_READ_ONLY` | `0` | `1` отказывает в каждом действии `device_control` и `device_capture`, а также блокирует `sms_send` и `call`. Это гарантия на стороне узла, не зависящая от диалога клиента. |
 
 ### Публикация файлов и веб-страниц
 
@@ -584,6 +763,13 @@ Gemini Spark решает, останавливаться ли с вопросо
 ```bash
 curl -fsSL https://smart-server.online/install.sh | bash
 ```
+
+**📱 Android (Termux)** — без root, Termux из F-Droid
+```bash
+curl -fsSL https://smart-server.online/install.sh | bash
+```
+Автозапуск на телефоне — служба runit плюс приложение Termux:Boot, а имя узла
+берётся из модели устройства: см. [docs/TERMUX.md](docs/TERMUX.md).
 
 **🪟 Windows (PowerShell)**
 ```powershell
@@ -640,6 +826,8 @@ https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ва�
 
 На Windows те же варианты есть в визуальном установщике (`.\install-gui.cmd`); локальный автономный режим там остаётся консольным (`.\install.ps1 -Mode standalone -Port 8096`).
 
+На **Android/Termux** работают те же варианты `./install.sh`; автозапуск — служба runit плюс приложение Termux:Boot вместо systemd, а автономный режим доступен только внутри самого телефона: см. [docs/TERMUX.md](docs/TERMUX.md).
+
 ---
 
 ## 🪟 Установка на Windows
@@ -652,6 +840,41 @@ https://smart-server.online/sse?user=<имя-вашего-узла>&token=<ва�
 | Что нужно | только PowerShell | клон или распакованный релиз — он вызывает `install.ps1`, `core/` и `install.sh` |
 | Варианты | `-Mode tunnel` (по умолчанию), `-Mode standalone`, `-User`, `-Gateway`, `-Token`, `-Port`, `-DryRun` | Быстрая настройка, Кастомная настройка, Удалённо по SSH |
 | Язык | `-Lang en` / `-Lang ru` | переключатель в шапке окна или `-Lang` |
+
+### Автоматические зависимости и архитектура
+
+Заранее готовить ничего не нужно. Оба установщика сами добывают всё необходимое, а если
+не смогли — останавливаются с явным сообщением, вместо того чтобы прописать автозапуск,
+который заведомо не заработает.
+
+| | Windows (`install.ps1`) | Linux / macOS (`install.sh`) |
+| :--- | :--- | :--- |
+| Python | `winget` → установщик python.org для **этой** архитектуры → `uv` | `apt` / `dnf` / `yum` / `zypper` / `pacman` / `apk` / `xbps` / `brew` → `uv` |
+| `websockets` | `pip` → `pip --user` → `ensurepip` → `uv` → venv | `pip` → `pip --break-system-packages` → `pip --user` → `ensurepip` → `uv` → venv |
+| Если не вышло ничего | остановка и точная команда для ручного запуска | остановка и точная команда для ручного запуска |
+
+`websockets` — единственная внешняя зависимость Python: `core/mcp_tools.py` и
+`core/server.py` используют только стандартную библиотеку. `uv` скачивается лишь после
+того, как более дешёвые пути уже не сработали.
+
+**Архитектура определяет, какая сборка скачивается.** Установщик спрашивает саму *ОС*, а
+не процесс: 32-битный PowerShell на 64-битной Windows сообщает `x86` и прячет настоящее
+значение в `PROCESSOR_ARCHITEW6432`, а эмулируемый x64-процесс на ARM64 сообщает `AMD64`:
+
+| Машина | Сборка Python | Архив `uv` |
+| :--- | :--- | :--- |
+| Windows x64 | `python-3.12.5-amd64.exe` | `x86_64-pc-windows-msvc` |
+| Windows ARM64 | `python-3.12.5-arm64.exe` | `aarch64-pc-windows-msvc` |
+| Windows 32-бит | `python-3.12.5.exe` | — (32-битных сборок uv для Windows нет) |
+| Linux `x86_64` | сборка пакетного менеджера | `x86_64-unknown-linux-gnu` |
+| Linux `aarch64` | сборка пакетного менеджера | `aarch64-unknown-linux-gnu` |
+| Linux `armv7l` / `i686` | сборка пакетного менеджера | `armv7-unknown-linux-gnueabihf` / `i686-unknown-linux-gnu` |
+| macOS `arm64` / `x86_64` | `brew` или `uv` | `aarch64-apple-darwin` / `x86_64-apple-darwin` |
+
+В автозапуск прописывается тот интерпретатор, у которого реально есть `websockets`, — это
+может быть venv или CPython, поставленный `uv`, и оба намеренно живут вне `PATH`.
+`install.ps1 -DryRun` и `install.sh --dry-run` показывают архитектуру, ничего не меняя, а
+визуальный установщик выводит её в предполётной проверке.
 
 ### Готовый .exe установщика
 
@@ -691,6 +914,7 @@ PowerShell, которые в Windows уже есть, а собирается �
 | Путь | Что это |
 | :--- | :--- |
 | `%USERPROFILE%\.config\antigravity-mesh\agent.env` | `MESH_GATEWAY`, `MESH_USER`, `MESH_TOKEN` |
+| `%USERPROFILE%\.config\antigravity-mesh\domain.env` | `MESH_PUBLIC_URL` — разрешённый общий домен, чтобы ссылки узла, его туннель и шлюз называли один и тот же хост (не пишется, если настроено только встроенное значение по умолчанию) |
 | `…\Start Menu\Programs\Startup\antigravity-agent.vbs` | запись автозапуска, чтобы узел поднимался после перезагрузки |
 | `%USERPROFILE%\.config\antigravity-mesh\agent.log` | вывод агента — на случай, если автозапуск молча не сработал |
 
@@ -714,6 +938,53 @@ PowerShell, которые в Windows уже есть, а собирается �
 ```
 
 Он поднимает локальный FastMCP-сервер на `http://localhost:8096/sse` и кладёт эту ссылку в буфер обмена.
+
+---
+
+## 📱 Установка на Android (Termux)
+
+Тот же `install.sh` ставит узел на смартфон или планшет без root, и телефон
+появляется в Gemini Spark как обычная машина. Полная инструкция:
+**[docs/TERMUX.md](docs/TERMUX.md)**.
+
+```bash
+# 1. Termux из F-Droid (не из Google Play); по желанию Termux:Boot и Termux:API
+pkg update -y
+# 2. обычная однострочная установка
+curl -fsSL https://smart-server.online/install.sh | bash
+```
+
+Что меняется на телефоне и как это решает установщик:
+
+| | |
+| :--- | :--- |
+| **Пакеты** | `pkg` вместо `apt`, `python`/`python-pip` вместо `python3-pip`/`python3-venv`: на телефоне нет root и нет `sudo`. |
+| **Имя узла** | Модель устройства (`Pixel 7 Pro` → `pixel7pro`): Android отвечает `localhost` всем приложениям, а шлюз держит один туннель на имя. |
+| **Файл домена** | `~/.config/antigravity-mesh/domain.env` — писать в `/etc` некуда. Установщик записывает туда разрешённый общий домен, чтобы ссылки телефона, его туннель и шлюз называли один и тот же хост (встроенное значение по умолчанию не записывается). |
+| **Автозапуск** | Служба **runit** (`termux-services`, аналог `Restart=always`) плюс скрипт **Termux:Boot**, который берёт wake lock после перезагрузки. |
+| **Буфер обмена** | `termux-clipboard-set` (Termux:API): ссылка MCP сразу вставляется в приложение Gemini. |
+
+> [!IMPORTANT]
+> Два переключателя на стороне Android нужно включить вам: установить
+> **Termux:Boot** и открыть его один раз, а также поставить оптимизацию батареи в
+> «Без ограничений» для Termux. Без этого Android выгружает узел при выключенном
+> экране.
+
+Телефон также должен **резолвить имя шлюза**. Шлюз в приватной сети (Tailscale,
+VPN, запись в DNS на ноутбуке) виден только там, а мобильная сеть приватные имена
+не знает. Подключите телефон к этой сети либо дайте шлюзу публично резолвимое имя:
+установщик распознаёт нерезолвимое имя и сообщает об этом до любых записей — см.
+[docs/TERMUX.md](docs/TERMUX.md#10-приватный-шлюз-tailscale--vpn).
+
+```bash
+sv status agy-agent                       # работает ли
+sv restart agy-agent                      # перезапустить
+tail -f $PREFIX/var/log/sv/agy-agent/current
+```
+
+`--mode=standalone` тоже работает, но слушает только `127.0.0.1` — доступен лишь
+внутри этого телефона. Чтобы управлять телефоном из Gemini, используйте режим
+туннеля (по умолчанию).
 
 ---
 
@@ -770,6 +1041,9 @@ gemini-computer-use update -Check -Json
 
 - Общий домен по умолчанию `smart-server.online`; переопределяется через `./install.sh --domain=<общий-домен>` (на стороне узла) или `MESH_PUBLIC_URL` (на стороне шлюза).
 - Старые ссылки с субдоменами устройства продолжают работать для совместимости и пишут предупреждение в лог; `MESH_LEGACY_SUBDOMAIN=0` на шлюзе отключает их.
+- Установщик теперь записывает разрешённый домен в файл домена, чтобы публичные ссылки узла, его туннель и шлюз называли один и тот же хост: `MESH_PUBLIC_URL=https://<общий-домен>` в `domain.env` — в обеих ветках установки (standalone и «облачный шлюз/туннель» сразу после `agent.env`). Значение сначала нормализуется, плейсхолдер `__MESH_DOMAIN__` и пустое значение не пишутся никогда, уже названный хост не переписывается, а неудачная запись не фатальна — установщик печатает точную команду для ручного запуска. Встроенное значение по умолчанию не записывается вообще: это запасной вариант, а не конфигурация, и закрепление его в файле заставило бы `core/domain.py` вовсе перестать смотреть на устаревший `MESH_GATEWAY`, так что позднейшая правка `agent.env` молча игнорировалась бы — потерь нет, потому что без файла то же значение и есть последний запасной вариант резолвера. Сухой прогон сообщает файл и значение, которое было бы записано, — включая `not written (the built-in default is a fallback, not a configuration)`, — и по-прежнему ничего не меняет на диске.
+- Зачем это нужно: ссылки на файлы строит `core/domain.py` по цепочке `MESH_PUBLIC_URL` → `AGY_PUBLIC_BASE_URL` → файл `domain.env` → встроенное значение по умолчанию, а устаревший `MESH_GATEWAY` из `agent.env` он намеренно не читает (его читает только `gateway_host()` — хост туннеля). Поэтому узел, поставленный обычным способом (`agent.env` с `MESH_GATEWAY`/`MESH_USER`/`MESH_TOKEN` и без файла домена), звонил на правильный шлюз, а ссылки публиковал на встроенном домене. На уже установленном узле: повторите установку или допишите одну строку вручную — `mkdir -p ~/.config/antigravity-mesh && echo 'MESH_PUBLIC_URL=https://<домен>' > ~/.config/antigravity-mesh/domain.env`, в Linux то же через `sudo tee /etc/antigravity-mesh/domain.env`. Уже выданные ссылки продолжают работать, новые берут настроенный домен.
+- `MESH_DOMAIN_FILE` переопределяет только *путь*, и задавать его нужно в конфигурации самого узла, а не в запуске установщика: держите его в `agent.env` (все ключи `MESH_*` оттуда экспортируются узлу), иначе домен окажется в файле, который узел никогда не прочитает. Каталог того файла, который реально используется, установщик создаёт сам. При `--ssh=<хост>` разрешённый здесь домен передаётся удалённому `install.sh` как `--domain=`, поэтому цель записывает именно этот хост, а не разрешает домен заново (копия из репозитория с плейсхолдером `__MESH_DOMAIN__` иначе ушла бы на встроенное значение).
 
 ---
 

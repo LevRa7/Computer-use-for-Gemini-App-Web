@@ -22,6 +22,7 @@ Resolution order, highest priority first:
    ==========  ==========================================================
    Linux       ``/etc/antigravity-mesh/domain.env``
    Windows     ``%USERPROFILE%\\.config\\antigravity-mesh\\domain.env``
+   Termux      ``~/.config/antigravity-mesh/domain.env``
    ==========  ==========================================================
 
    ``domain.env`` is plain ``KEY=VALUE`` and may carry a UTF-8 BOM, because
@@ -96,13 +97,38 @@ def read_env_file(path: str) -> Dict[str, str]:
 # The domain file
 # ---------------------------------------------------------------------------
 
+def is_termux() -> bool:
+    """True when this process runs inside Termux on Android.
+
+    Termux is not FHS-compliant: a phone app is never root, there is no ``/etc``
+    at the usual place and no host-level configuration directory to put a domain
+    file in. The question is answered *here* rather than in a new module because
+    this one must stay importable on its own - ``gateway.py`` is deployed without
+    the rest of the package - and :mod:`core.agent` asks it too instead of
+    repeating the check.
+
+    Neither signal is trusted alone: Termux exports ``TERMUX_VERSION``, its
+    ``$PREFIX`` points inside ``com.termux``, and its application data directory
+    has a fixed path. A Linux host with an unrelated ``$PREFIX`` is not a phone.
+    """
+    if os.environ.get("TERMUX_VERSION"):
+        return True
+    if "com.termux" in os.environ.get("PREFIX", ""):
+        return True
+    return os.path.isdir("/data/data/com.termux/files/usr/bin")
+
+
 def default_domain_file() -> str:
     """Where ``domain.env`` lives when the operator did not override the path.
 
-    Linux keeps host-level configuration in ``/etc``; Windows has no such place and
-    uses the same per-user directory as ``agent.env``.
+    Linux keeps host-level configuration in ``/etc``. Windows and Termux have no
+    such place - Windows because the concept does not exist there, Termux because
+    a phone has no root and no ``/etc`` - so both use the per-user directory that
+    also holds ``agent.env``. ``install.sh`` resolves the same path for a Termux
+    install, so the installer and the node never disagree about where the domain
+    lives.
     """
-    if os.name == "nt":
+    if os.name == "nt" or is_termux():
         return os.path.join(os.path.expanduser("~"), ".config", _CONFIG_DIR_NAME, "domain.env")
     return "/etc/%s/domain.env" % _CONFIG_DIR_NAME
 

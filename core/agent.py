@@ -45,6 +45,7 @@ import os
 import random
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -95,6 +96,32 @@ def read_env_file(path: str) -> dict:
     return domain.read_env_file(path)
 
 
+#: Hostnames that identify no machine. Android answers "localhost" to
+#: ``gethostname(2)`` for every device, and Termux has no hostname of its own, so
+#: a node that trusted it would collide with every other phone: the gateway keeps
+#: exactly one tunnel per name and the newer one evicts the older.
+_USELESS_HOSTNAMES = frozenset({"", "localhost", "localhost.localdomain", "android"})
+
+
+def android_device_name() -> str:
+    """The phone's model as a node name (``Pixel 7 Pro`` -> ``pixel7pro``).
+
+    ``getprop`` ships with Android itself, needs no root and is on PATH inside
+    Termux. A device that does not answer yields "" and the caller falls back to
+    the generic name - this helper never raises.
+    """
+    for prop in ("ro.product.model", "ro.product.device"):
+        try:
+            completed = subprocess.run(["getprop", prop], capture_output=True, timeout=5)
+        except Exception:
+            continue
+        value = (completed.stdout or b"").decode("utf-8", "replace")
+        safe = "".join(c for c in value.strip().lower() if c.isalnum() or c in "-_")
+        if safe:
+            return safe
+    return ""
+
+
 def default_node_name() -> str:
     """Node name used when ``MESH_USER`` is not configured: the machine's name.
 
@@ -105,12 +132,18 @@ def default_node_name() -> str:
     precisely the flapping the instance lock exists to prevent (and that lock is
     per machine, so it cannot help across machines). The installers already
     register the sanitised hostname, so the agent now agrees with them.
+
+    On a phone the hostname is worse than useless - it is the same "localhost" for
+    every device - so Termux uses the device model instead, exactly as the
+    installer registers it.
     """
     try:
         hostname = socket.gethostname()
     except Exception:
         hostname = ""
     safe = "".join(c for c in hostname.strip().lower() if c.isalnum() or c in "-_")
+    if safe in _USELESS_HOSTNAMES and domain.is_termux():
+        safe = android_device_name()
     return safe or "node"
 
 
@@ -186,6 +219,15 @@ def configure_from_env() -> None:
         max_share_bytes=os.environ.get("MESH_WEB_MAX_BYTES"),
         max_shares=os.environ.get("MESH_WEB_MAX_SHARES"),
         web_listing=os.environ.get("MESH_WEB_LISTING"),
+        # Device branch (core/device.py, core/termux.py). "auto" is the default and
+        # keeps the tools advertised on every platform - the phone-only ones then
+        # answer with a reason instead of vanishing, because the gateway's static
+        # tool surface must match this node's exactly.
+        device=os.environ.get("MESH_DEVICE") or "auto",
+        device_actions=os.environ.get("MESH_DEVICE_ACTIONS") or None,
+        capture_dir=os.environ.get("MESH_DEVICE_CAPTURE_DIR") or None,
+        device_pim=_env_flag("MESH_DEVICE_PIM"),
+        device_quick=_env_flag("MESH_DEVICE_QUICK"),
     )
 
 

@@ -1,0 +1,21 @@
+hostname: localhost
+os: Android-16-aarch64-64bit
+kernel: 16
+home: /data/data/com.termux/files/home
+command_shell: bash
+
+[memory]
+total        used        free      shared  buff/cache   available
+Mem:            14Gi       9.6Gi       239Mi        77Mi       5.0Gi       4.9Gi
+Swap:          9.5Gi       7.1Gi       2.4Gi
+
+[load]
+04:37:20 up 4 days, 21:00,  load average: 6.43, 5.25, 6.02
+
+[top_processes]
+COMMAND         %MEM
+com.termux       1.2
+python           0.2
+head             0.0
+/data/data/com.  0.0
+/data/data/com.  0.0

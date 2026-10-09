@@ -87,11 +87,21 @@ def test_post_install_check_asks_the_gateway_about_the_node():
 
 
 def test_dry_run_reports_the_node_state_as_the_sixth_line():
-    """install-gui.ps1 reads the dry-run lines positionally; the node row is #6."""
+    """install-gui.ps1 reads the dry-run lines positionally; the node row is #6.
+
+    Only the first six rows are a contract - that is what the wizard's parser
+    indexes. Rows after them (the architecture row added with the per-architecture
+    Python install, and the domain-file row the installer now writes, for example)
+    may come and go, but both language blocks must stay the same length and keep the
+    closing "nothing was changed" line.
+    """
     labels = re.findall(r'\[DRY-RUN\]\s+([^\s:]+)', _text())
-    assert len(labels) == 14, labels          # two language blocks of seven lines
-    assert labels[:6] == ["Python", "websockets", "Домен", "Конфиг", "Автозапуск", "Узел"]
-    assert labels[7:13] == ["Python", "websockets", "Domain", "Config", "Autostart", "Node"]
+    assert len(labels) % 2 == 0, labels        # two language blocks
+    block = len(labels) // 2
+    russian, english = labels[:block], labels[block:]
+    assert len(russian) == len(english) >= 7
+    assert russian[:6] == ["Python", "websockets", "Домен", "Конфиг", "Автозапуск", "Узел"]
+    assert english[:6] == ["Python", "websockets", "Domain", "Config", "Autostart", "Node"]
 
 
 # ---------------------------------------------------------------------------

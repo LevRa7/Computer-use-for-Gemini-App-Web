@@ -1,0 +1,12 @@
+{
+  "bssid": "02:00:00:00:00:01",
+  "frequency_mhz": 5220,
+  "ip": "192.168.1.100",
+  "link_speed_mbps": 234,
+  "mac_address": "02:00:00:00:00:02",
+  "network_id": 22,
+  "rssi": -65,
+  "ssid": "HomeNetwork",
+  "ssid_hidden": false,
+  "supplicant_state": "COMPLETED"
+}

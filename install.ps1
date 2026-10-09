@@ -62,6 +62,79 @@ if ($Lang -eq "ru") {
 # resolve back into WindowsApps.
 $WindowsAppsMarker = "\WindowsApps\"
 
+# ------------------------------------------------------------------------------
+#  ARCHITECTURE - which build of Python this machine actually needs
+#
+#  This installer used to download python-3.12.5-amd64.exe unconditionally, which
+#  is wrong in two measurable ways:
+#
+#    * on 32-bit Windows the amd64 installer refuses to run at all, so the
+#      automatic step failed and the operator was told to install Python by hand;
+#    * on ARM64 Windows it installs an x64 build that only works under emulation,
+#      which is slower and breaks as soon as a dependency has no emulated wheel.
+#
+#  RuntimeInformation.OSArchitecture is asked FIRST because it reports the native
+#  OS architecture even when this PowerShell is itself emulated. The environment
+#  variables only describe the process: a 32-bit PowerShell on 64-bit Windows
+#  reports PROCESSOR_ARCHITECTURE=x86 and hides the truth in PROCESSOR_ARCHITEW6432.
+#  Both are read so the answer still works on a .NET runtime without
+#  RuntimeInformation (it needs 4.7.1+).
+# ------------------------------------------------------------------------------
+function Get-OsArchitecture {
+    $raw = ""
+    try { $raw = "$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" } catch {}
+    if (-not $raw) {
+        if ($env:PROCESSOR_ARCHITEW6432) { $raw = $env:PROCESSOR_ARCHITEW6432 }
+        elseif ($env:PROCESSOR_ARCHITECTURE) { $raw = $env:PROCESSOR_ARCHITECTURE }
+    }
+    switch -Regex ("$raw".Trim().ToUpperInvariant()) {
+        # PyOrgSuffix is the python.org file-name suffix; UvTarget is the
+        # astral-sh/uv release asset. uv ships no 32-bit Windows build, so that
+        # column stays empty for x86 and the chain simply skips it there.
+        '^(AMD64|X64)$'     { return @{ Key='amd64'; Label='x64';          PyOrgSuffix='-amd64'; UvTarget='x86_64-pc-windows-msvc';  Supported=$true } }
+        '^(ARM64)$'         { return @{ Key='arm64'; Label='ARM64';        PyOrgSuffix='-arm64'; UvTarget='aarch64-pc-windows-msvc'; Supported=$true } }
+        '^(X86|I386|I686)$' { return @{ Key='x86';   Label='x86 (32-bit)'; PyOrgSuffix='';      UvTarget=$null;                       Supported=$true } }
+        default             { return @{ Key='unknown'; Label="$raw";       PyOrgSuffix=$null;    UvTarget=$null;                       Supported=$false } }
+    }
+}
+
+$OsArch = Get-OsArchitecture
+
+# The exact CPython the direct-download fallback installs. Kept in one place so the
+# URL, the cached file name and the version can never drift apart.
+$PyOrgVersion = '3.12.5'
+
+# uv is the last resort: one static binary that can fetch its own CPython and
+# install packages without pip. That is what makes it useful on a machine where
+# winget is blocked and pip is missing or refuses to write (PEP 668).
+$UvDir = "$env:LOCALAPPDATA\uv"
+$UvExe = $null
+
+function Get-PyOrgInstallerName {
+    param($Arch)
+    if (-not $Arch -or -not $Arch.Supported -or $null -eq $Arch.PyOrgSuffix) { return "" }
+    return "python-$PyOrgVersion$($Arch.PyOrgSuffix).exe"
+}
+
+# A failed download usually leaves an HTML error page on disk, and running that as
+# an installer produces a bare "not a valid Win32 application" with no hint of the
+# real cause. Checking the DOS 'MZ' magic keeps the diagnosis inside this script.
+# The size floor only has to separate a real binary from an error page, so it stays
+# small: a large floor would reject a perfectly valid small executable and turn this
+# into an "is it big" test rather than an "is it a PE" test.
+function Test-PeExecutable {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        if ((Get-Item -LiteralPath $Path).Length -lt 64KB) { return $false }
+        # Two bytes through the stream API: "Get-Content -Encoding Byte" is
+        # PowerShell 5.1 only, and this file also runs under pwsh 7.
+        $fs = [System.IO.File]::OpenRead($Path)
+        try { $b0 = $fs.ReadByte(); $b1 = $fs.ReadByte() } finally { $fs.Dispose() }
+        return ($b0 -eq 0x4D -and $b1 -eq 0x5A)
+    } catch { return $false }
+}
+
 function Test-RealPython {
     param([string]$Path)
     if (-not $Path) { return $false }
@@ -87,6 +160,136 @@ function Test-PythonWebsockets {
     } catch { return $false }
 }
 
+# ------------------------------------------------------------------------------
+#  AUTOMATIC PYTHON INSTALLATION - three sources, tried in that order
+#
+#  winget first, because it is the platform's own mechanism and picks the correct
+#  architecture by itself; the python.org download second, because it also works
+#  where winget is missing, blocked by policy or has no configured source; uv last,
+#  because it is the only one of the three that needs neither an installer nor a
+#  working pip.
+#
+#  Every step re-resolves the interpreter with Select-RealPython instead of trusting
+#  the installer's exit code. A silent per-user install, a queued Store update and
+#  an "already installed" no-op all report success, and only a probe tells them
+#  apart - which is exactly the failure this chain exists to remove.
+# ------------------------------------------------------------------------------
+
+function Install-PythonFromPythonOrg {
+    param($Arch)
+    $name = Get-PyOrgInstallerName $Arch
+    if (-not $name) { return $false }
+    $url = "https://www.python.org/ftp/python/$PyOrgVersion/$name"
+    $installer = "$env:TEMP\$name"
+    # Reuse an earlier good download: this is the same ~25 MB file on every re-run,
+    # and a half-written .exe from an interrupted attempt is rejected by the MZ
+    # check rather than executed.
+    if (-not (Test-PeExecutable $installer)) {
+        try { Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing -ErrorAction Stop } catch { return $false }
+    }
+    if (-not (Test-PeExecutable $installer)) { return $false }
+    try {
+        # InstallAllUsers=0 keeps this per-user and therefore elevation-free.
+        # Include_pip=1 is explicit so the dependency step always has a pip.
+        $proc = Start-Process -FilePath $installer `
+            -ArgumentList '/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_pip=1' `
+            -Wait -PassThru -ErrorAction Stop
+        # 3010 is "success, reboot required" and is a success here.
+        return ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010)
+    } catch { return $false }
+}
+
+function Install-UvWindows {
+    # Returns the path to uv.exe, or $null. The release archive is fetched and
+    # unpacked here rather than piping astral.sh's install script into iex: a script
+    # that arrives over the network and is executed unread is a worse default than
+    # an archive this function unpacks itself.
+    param($Arch)
+    if (-not $Arch -or -not $Arch.UvTarget) { return $null }
+    $exe = Join-Path $UvDir 'uv.exe'
+    if (Test-Path -LiteralPath $exe) { return $exe }
+    $zip = Join-Path $env:TEMP "uv-$($Arch.Key).zip"
+    try {
+        Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$($Arch.UvTarget).zip" `
+            -OutFile $zip -UseBasicParsing -ErrorAction Stop
+        if (!(Test-Path $UvDir)) { New-Item -ItemType Directory -Path $UvDir -Force | Out-Null }
+        # The asset carries uv.exe, uvw.exe and uvx.exe at its top level.
+        Expand-Archive -LiteralPath $zip -DestinationPath $UvDir -Force -ErrorAction Stop
+    } catch { return $null }
+    if (Test-Path -LiteralPath $exe) { return $exe }
+    return $null
+}
+
+function Install-PythonViaUv {
+    # uv downloads a standalone CPython into its own directory, so no installer,
+    # no elevation and no writable system Python is involved. Get-PythonCandidates
+    # knows that directory, which is how the freshly fetched interpreter is found
+    # by the ordinary resolution path.
+    param([string]$Uv)
+    if (-not $Uv) { return $false }
+    try {
+        & $Uv python install $PyOrgVersion 2>&1 | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# ------------------------------------------------------------------------------
+#  DEPENDENCY INSTALLATION - websockets is the node's only external requirement
+#
+#  core/mcp_tools.py and core/server.py are standard library only, so this one
+#  package is the entire dependency surface. It is installed through five different
+#  mechanisms because each fails for a different reason on a locked-down machine:
+#  a plain pip needs a writable site-packages, --user needs a writable profile,
+#  ensurepip needs an interpreter that shipped without pip, uv needs neither pip nor
+#  a writable Python directory, and a venv needs only the interpreter itself.
+#
+#  Returns the interpreter that actually ended up with the package. That return
+#  value matters: when only the venv fallback works, the pinned autostart
+#  interpreter must BECOME the venv's python.exe, or the node autostarts with an
+#  interpreter that cannot import websockets.
+# ------------------------------------------------------------------------------
+function Install-WebsocketsFor {
+    param([string]$Python, [string]$Uv)
+
+    if (Test-PythonWebsockets $Python) { return @{ Ok = $true; Python = $Python } }
+
+    # 1. plain pip, after upgrading it: an old pip cannot find or build wheels.
+    & $Python -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | Out-Null
+    & $Python -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
+    if (Test-PythonWebsockets $Python) { return @{ Ok = $true; Python = $Python } }
+
+    # 2. --user: site-packages is read-only, the profile is not.
+    & $Python -m pip install --disable-pip-version-check --quiet --user websockets 2>&1 | Out-Null
+    if (Test-PythonWebsockets $Python) { return @{ Ok = $true; Python = $Python } }
+
+    # 3. ensurepip: a per-user install lands without pip when the feature set was
+    #    trimmed, or when the launcher is disabled by policy.
+    & $Python -m ensurepip --default-pip 2>&1 | Out-Null
+    & $Python -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
+    if (Test-PythonWebsockets $Python) { return @{ Ok = $true; Python = $Python } }
+
+    # 4. uv: installs into a managed environment without needing pip at all.
+    if ($Uv) {
+        & $Uv pip install --python $Python websockets 2>&1 | Out-Null
+        if (Test-PythonWebsockets $Python) { return @{ Ok = $true; Python = $Python } }
+    }
+
+    # 5. venv: the only fallback that needs no write access to the system Python.
+    $venvDir = "$env:USERPROFILE\.config\antigravity-mesh\venv"
+    $venvPython = "$venvDir\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $venvPython)) { & $Python -m venv $venvDir 2>&1 | Out-Null }
+    if (Test-Path -LiteralPath $venvPython) {
+        & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | Out-Null
+        & $venvPython -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
+        if (Test-PythonWebsockets $venvPython) { return @{ Ok = $true; Python = $venvPython } }
+        if ($Uv) {
+            & $Uv pip install --python $venvPython websockets 2>&1 | Out-Null
+            if (Test-PythonWebsockets $venvPython) { return @{ Ok = $true; Python = $venvPython } }
+        }
+    }
+    return @{ Ok = $false; Python = $Python }
+}
+
 function Get-PythonCandidates {
     $list = @()
     # Every "python" on PATH, not just the first: the first hit is usually the
@@ -110,6 +313,19 @@ function Get-PythonCandidates {
         $list += @(Get-ChildItem -Path $localRoot -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending |
             ForEach-Object { Join-Path $_.FullName 'python.exe' })
+    }
+    # The uv-managed CPython, for the case where the uv fallback is what produced
+    # an interpreter: it lives outside PATH and outside the python.org directories,
+    # so without this the freshly fetched Python would be installed and then never
+    # found again. UV_PYTHON_INSTALL_DIR is honoured because uv lets a user move it.
+    $uvRoots = @("$env:APPDATA\uv\python")
+    if ($env:UV_PYTHON_INSTALL_DIR) { $uvRoots += $env:UV_PYTHON_INSTALL_DIR }
+    foreach ($uvRoot in $uvRoots) {
+        if (Test-Path -LiteralPath $uvRoot) {
+            $list += @(Get-ChildItem -Path $uvRoot -Directory -Filter 'cpython-3*' -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'python.exe' })
+        }
     }
     # The "py" launcher is not an interpreter: ask it which real python.exe it
     # runs, so the autostart entry always names a python.exe, never "py -3".
@@ -248,6 +464,85 @@ function Get-ModuleDefaultDomain {
     return "$value".Trim()
 }
 
+# ------------------------------------------------------------------------------
+#  PERSIST THE DOMAIN (what the node reads to build its public links)
+#
+#  core/domain.py resolves the public domain from MESH_PUBLIC_URL in the
+#  environment, then from the domain file, then from its built-in default - and it
+#  never reads the legacy MESH_GATEWAY that agent.env carries. A node installed
+#  with only agent.env therefore dials the right gateway (gateway_host() does
+#  honour MESH_GATEWAY) while minting share links on the built-in default.
+#
+#  The domain is already resolved here, so it is written down here: the place that
+#  decides the domain is then also the place that records it, and the node's
+#  links, its tunnel and the gateway agree by construction.
+#
+#  Never fatal: a profile directory that cannot be written still leaves a working
+#  node, so a failure only prints the command the operator can run by hand.
+# ------------------------------------------------------------------------------
+function Write-DomainFile {
+    param([string]$Domain, [string]$Path)
+
+    # The caller hands over a bare host (the resolution block above normalises it),
+    # but this function is the last thing between a value and the file the runtime
+    # trusts: a scheme or a trailing slash would be written verbatim and become
+    # "MESH_PUBLIC_URL=https://https://host/", which no reader recovers from.
+    # Normalise exactly the way the resolution chain does.
+    $Domain = Get-NormalisedHost $Domain
+    if ([string]::IsNullOrWhiteSpace($Domain) -or $Domain -eq $DomainPlaceholder) { return }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+
+    # Never record the project's built-in default. It is a fallback, not a decision:
+    # writing it would turn "nothing is configured" into a pinned domain file, and
+    # once that file exists core/domain.py stops consulting the legacy MESH_GATEWAY
+    # at all - the operator's own agent.env knob would silently go inert. Nothing is
+    # lost by skipping it: with no file the resolver's last fallback IS that value,
+    # so the node's links and its tunnel still name the same host.
+    $moduleDefault = Get-NormalisedHost (Get-ModuleDefaultDomain)
+    if ($moduleDefault -and $Domain -eq $moduleDefault) { return }
+
+    $existing = Get-NormalisedHost (Get-DomainFileValue $Path)
+    if ($existing -eq $Domain) { return }
+
+    $line = "MESH_PUBLIC_URL=https://$Domain"
+    $directory = Split-Path -Parent $Path
+    try {
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+            New-Item -ItemType Directory -Force -Path $directory | Out-Null
+        }
+        # Written without a BOM. Every reader tolerates one (core/domain.py reads
+        # utf-8-sig, install.sh strips it), but a BOM-less file is readable by all
+        # of them, sed and grep included.
+        [System.IO.File]::WriteAllText(
+            $Path, $line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        if ($Lang -eq "ru") {
+            Write-Host "[!] Не удалось записать домен в $Path : $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "    Ссылки узла будут строиться на встроенном домене по умолчанию." -ForegroundColor Yellow
+            Write-Host "    Запишите вручную:  Set-Content '$Path' '$line'" -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] Could not write the domain to $Path : $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "    The node's links would use the built-in default domain." -ForegroundColor Yellow
+            Write-Host "    Write it by hand:  Set-Content '$Path' '$line'" -ForegroundColor Yellow
+        }
+        return
+    }
+
+    if ($Lang -eq "ru") {
+        if ($existing) {
+            Write-Host "[OK] Домен узла: $line ($Path, было https://$existing)" -ForegroundColor Green
+        } else {
+            Write-Host "[OK] Домен узла: $line ($Path)" -ForegroundColor Green
+        }
+    } else {
+        if ($existing) {
+            Write-Host "[OK] Node domain: $line ($Path, was https://$existing)" -ForegroundColor Green
+        } else {
+            Write-Host "[OK] Node domain: $line ($Path)" -ForegroundColor Green
+        }
+    }
+}
+
 $DomainFilePath = if ($env:MESH_DOMAIN_FILE) { $env:MESH_DOMAIN_FILE } else { "$env:USERPROFILE\.config\antigravity-mesh\domain.env" }
 $ResolvedDomain = Get-NormalisedHost $Gateway
 if (-not $ResolvedDomain) { $ResolvedDomain = Get-NormalisedHost $env:MESH_PUBLIC_URL }
@@ -304,6 +599,10 @@ if ($DryRun) {
         $wsState = if ($LASTEXITCODE -eq 0) { "installed" } else { "missing" }
     }
     $pyState = if ($hasPython) { $PyExe } else { "not found" }
+    # The architecture is reported here because it decides which build every
+    # automatic step above will fetch, and "why did it install the x64 build on my
+    # ARM machine" is not answerable from the rest of this report.
+    $archState = if ($OsArch.Supported) { $OsArch.Label } else { "$($OsArch.Label) (unsupported)" }
     $domainState = if ($DomainMissing) { "NOT CONFIGURED" } else { $Gateway }
     # The live node state, so a preflight can say "your node is offline right now"
     # before anything on disk is touched. The name may still gain a suffix at
@@ -318,6 +617,16 @@ if ($DryRun) {
             $nodeState = "gateway unreachable"
         }
     }
+    # What the domain file would receive: the very line the real run writes. A dry
+    # run changes nothing, so this only reports it - and it reports a skip when the
+    # writer would skip, so the two never disagree.
+    $domainFileState = if ($DomainMissing) {
+        "$DomainFilePath (not written: no domain configured)"
+    } elseif ($Gateway -eq (Get-NormalisedHost (Get-ModuleDefaultDomain))) {
+        "$DomainFilePath (not written: the built-in default is a fallback, not a configuration)"
+    } else {
+        "$DomainFilePath -> MESH_PUBLIC_URL=https://$Gateway"
+    }
     if ($Lang -eq "ru") {
         Write-Host "[DRY-RUN] Python      : $pyState"
         Write-Host "[DRY-RUN] websockets  : $wsState"
@@ -325,6 +634,8 @@ if ($DryRun) {
         Write-Host "[DRY-RUN] Конфиг      : $env:USERPROFILE\.config\antigravity-mesh"
         Write-Host "[DRY-RUN] Автозапуск  : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
         Write-Host "[DRY-RUN] Узел        : $nodeState"
+        Write-Host "[DRY-RUN] Архитектура : $archState"
+        Write-Host "[DRY-RUN] Файл домена : $domainFileState"
         Write-Host "[DRY-RUN] Действий не выполнено." -ForegroundColor Yellow
     } else {
         Write-Host "[DRY-RUN] Python      : $pyState"
@@ -333,56 +644,69 @@ if ($DryRun) {
         Write-Host "[DRY-RUN] Config      : $env:USERPROFILE\.config\antigravity-mesh"
         Write-Host "[DRY-RUN] Autostart   : $([Environment]::GetFolderPath('Startup'))\antigravity-agent.vbs"
         Write-Host "[DRY-RUN] Node        : $nodeState"
+        Write-Host "[DRY-RUN] Arch        : $archState"
+        Write-Host "[DRY-RUN] Domain file : $domainFileState"
         Write-Host "[DRY-RUN] Nothing was changed." -ForegroundColor Yellow
     }
     if ($DomainMissing -or -not $hasPython) { exit 2 }
     exit 0
 }
 
+function Resolve-PythonAfterInstall {
+    # Re-resolve with exactly the same rules the detection above used, and put the
+    # winner on PATH for the child processes below. This is a function because the
+    # chain re-resolves after each of the three sources and those call sites must
+    # stay identical: a fresh interpreter only counts if it is a real python.exe
+    # outside WindowsApps and it actually runs.
+    $found = Select-RealPython
+    if ($found) { Add-PythonToPath $found }
+    return $found
+}
+
 if (-not $hasPython) {
     if ($Lang -eq "ru") {
-        Write-Host "[1/3] Python не найден. Автоматическая установка через winget..." -ForegroundColor Yellow
+        Write-Host "[1/3] Python не найден. Архитектура: $($OsArch.Label). Автоматическая установка..." -ForegroundColor Yellow
     } else {
-        Write-Host "[1/3] Python not found. Installing automatically via winget..." -ForegroundColor Yellow
+        Write-Host "[1/3] Python not found. Architecture: $($OsArch.Label). Installing automatically..." -ForegroundColor Yellow
     }
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        winget install --id Python.Python.3.12 -e --silent --accept-source-agreements --accept-package-agreements
-        $localPyDir = "$env:LOCALAPPDATA\Programs\Python\Python312"
-        if (Test-Path "$localPyDir\python.exe") {
-            $env:Path = "$localPyDir;$localPyDir\Scripts;$env:Path"
-        }
-    } else {
-        try {
-            if ($Lang -eq "ru") { Write-Host "[1/3] Загрузка официального установщика Python 3.12..." -ForegroundColor Yellow } else { Write-Host "[1/3] Downloading official Python 3.12 installer..." -ForegroundColor Yellow }
-            $pyInstaller = "$env:TEMP\python-3.12.5-amd64.exe"
-            Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.5/python-3.12.5-amd64.exe" -OutFile $pyInstaller -UseBasicParsing
-            Start-Process -FilePath $pyInstaller -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0" -Wait
-            $pyPaths = @("$env:LOCALAPPDATA\Programs\Python\Python312", "$env:ProgramFiles\Python312")
-            foreach ($p in $pyPaths) {
-                if (Test-Path "$p\python.exe") {
-                    $env:Path = "$p;$p\Scripts;$env:Path"
-                    $hasPython = $true
-                    break
-                }
-            }
-        } catch {
-            Write-Error "Python 3 auto-installation failed: $_"
-            exit 1
+
+    # 1. winget - the platform's own mechanism, and the only source that needs no
+    #    architecture mapping from this script.
+    if (-not $hasPython -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        if ($Lang -eq "ru") { Write-Host "[1/3] Источник 1/3: winget..." -ForegroundColor Yellow }
+        else { Write-Host "[1/3] Source 1/3: winget..." -ForegroundColor Yellow }
+        & winget install --id Python.Python.3.12 -e --silent --accept-source-agreements --accept-package-agreements
+        $fresh = Resolve-PythonAfterInstall
+        if ($fresh) { $PyExe = $fresh; $hasPython = $true }
+    }
+
+    # 2. python.org, for the architecture this machine actually runs. This used to
+    #    be the "winget is missing" branch, so a machine WITH winget never reached
+    #    it - and a winget that is present but blocked by policy, has no source, or
+    #    silently fails left the installer with nothing to fall back on.
+    if (-not $hasPython -and $OsArch.Supported) {
+        if ($Lang -eq "ru") { Write-Host "[1/3] Источник 2/3: установщик python.org для $($OsArch.Label)..." -ForegroundColor Yellow }
+        else { Write-Host "[1/3] Source 2/3: the python.org installer for $($OsArch.Label)..." -ForegroundColor Yellow }
+        if (Install-PythonFromPythonOrg $OsArch) {
+            $fresh = Resolve-PythonAfterInstall
+            if ($fresh) { $PyExe = $fresh; $hasPython = $true }
         }
     }
-    # Re-resolve with exactly the same rules: a fresh interpreter only counts if it
-    # is a real python.exe outside WindowsApps and it actually runs.
+
+    # 3. uv - brings its own CPython and needs neither an installer nor a pip.
     if (-not $hasPython) {
-        $PyExe = Select-RealPython
-        if ($PyExe) {
-            Add-PythonToPath $PyExe
-            $hasPython = $true
-            if ($Lang -eq "ru") {
-                Write-Host "[1/3] Python обнаружен: $PyExe" -ForegroundColor Green
-            } else {
-                Write-Host "[1/3] Python detected: $PyExe" -ForegroundColor Green
-            }
+        if ($Lang -eq "ru") { Write-Host "[1/3] Источник 3/3: uv..." -ForegroundColor Yellow }
+        else { Write-Host "[1/3] Source 3/3: uv..." -ForegroundColor Yellow }
+        $UvExe = Install-UvWindows $OsArch
+        if ($UvExe -and (Install-PythonViaUv $UvExe)) {
+            $fresh = Resolve-PythonAfterInstall
+            if ($fresh) { $PyExe = $fresh; $hasPython = $true }
         }
+    }
+
+    if ($hasPython) {
+        if ($Lang -eq "ru") { Write-Host "[1/3] Python обнаружен: $PyExe" -ForegroundColor Green }
+        else { Write-Host "[1/3] Python detected: $PyExe" -ForegroundColor Green }
     }
 }
 
@@ -423,33 +747,43 @@ if ("$PyExe" -like "*$WindowsAppsMarker*") {
     $pyRun = if ($PyExe) { $PyExe } else { "python" }
     $pyExeOnly = ($pyRun -split " ")[0]
 
-    # Upgrading pip first avoids the "old pip cannot build wheels" failure common
-    # on a fresh Python installation.
-    & $pyExeOnly -c "import websockets" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        & $pyExeOnly -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | Out-Null
-        & $pyExeOnly -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            & $pyExeOnly -m ensurepip --default-pip 2>&1 | Out-Null
-            & $pyExeOnly -m pip install --disable-pip-version-check --quiet websockets 2>&1 | Out-Null
-        }
+    # The dependency step may have to SWITCH interpreters (the venv fallback), and
+    # everything below - the Startup launcher, the watchdog task, the final "run
+    # now" - must use the interpreter that can actually import websockets. Pinning
+    # the pre-install choice here is what left a node autostarting against a Python
+    # that could not import the one package the agent needs.
+    $result = Install-WebsocketsFor -Python $pyExeOnly -Uv $UvExe
+
+    # uv is only fetched when everything else failed. It was not needed for Python
+    # itself on this machine, so downloading it up front would be an 18 MB cost for
+    # a machine that never needs it - but a pip that cannot write anywhere is
+    # precisely the case uv fixes, so the chain is retried once with it.
+    if (-not $result.Ok -and -not $UvExe) {
+        $UvExe = Install-UvWindows $OsArch
+        if ($UvExe) { $result = Install-WebsocketsFor -Python $pyExeOnly -Uv $UvExe }
     }
 
-    & $pyExeOnly -c "import websockets" 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    if ($result.Ok -and $result.Python) {
+        $pyExeOnly = $result.Python
+        $PyExe = $result.Python
+    }
+
+    if (-not $result.Ok) {
         if ($Lang -eq "ru") {
             Write-Host "[!] Не удалось установить websockets автоматически." -ForegroundColor Red
+            Write-Host "    Проверены: pip, pip --user, ensurepip, uv и venv." -ForegroundColor Yellow
             Write-Host "    Выполните вручную: $pyExeOnly -m pip install websockets" -ForegroundColor Yellow
         } else {
             Write-Host "[!] Could not install websockets automatically." -ForegroundColor Red
+            Write-Host "    Tried: pip, pip --user, ensurepip, uv and a venv." -ForegroundColor Yellow
             Write-Host "    Run manually: $pyExeOnly -m pip install websockets" -ForegroundColor Yellow
         }
         exit 1
     }
     if ($Lang -eq "ru") {
-        Write-Host "[OK] websockets установлен." -ForegroundColor Green
+        Write-Host "[OK] websockets установлен ($pyExeOnly)." -ForegroundColor Green
     } else {
-        Write-Host "[OK] websockets is installed." -ForegroundColor Green
+        Write-Host "[OK] websockets is installed ($pyExeOnly)." -ForegroundColor Green
     }
 
 $ConfigDir = "$env:USERPROFILE\.config\antigravity-mesh"
@@ -611,6 +945,11 @@ $regPayloadObj = @{
     auto_suffix = $true
     mac_address = $detectedMac
     os = $detectedOs
+    # The architecture is part of the device fingerprint: two machines behind one
+    # NAT can share a MAC-derived identity only if their OS and architecture agree,
+    # and a gateway operator needs to know which build a node is running when a
+    # wheel-related failure is reported.
+    arch = $OsArch.Key
 }
 if (-not [string]::IsNullOrWhiteSpace($Token)) {
     $regPayloadObj.token = $Token
@@ -690,6 +1029,12 @@ MESH_GATEWAY=$Gateway
 MESH_USER=$AssignedUser
 MESH_TOKEN=$AssignedToken
 "@ | Out-File -FilePath $envFile -Encoding utf8
+
+# agent.env carries only the legacy MESH_GATEWAY, which core/domain.py honours for
+# the tunnel but never for the links a node publishes. The domain file is what
+# keeps share links on the gateway this node is registered on, so it is written
+# down before the agent is started.
+Write-DomainFile -Domain $Gateway -Path $DomainFilePath
 
 # Start agent in background
 $env:MESH_GATEWAY = $Gateway

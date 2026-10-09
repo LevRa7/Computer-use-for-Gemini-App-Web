@@ -1,0 +1,138 @@
+{
+  "source": "tools/probe-node.py",
+  "probes": {
+    "system_info": {
+      "command": "tools/call",
+      "file": "system_info.txt",
+      "status": "ok"
+    },
+    "getprop-model": {
+      "command": "getprop ro.product.model",
+      "file": "getprop-model.txt",
+      "status": "ok"
+    },
+    "getprop-manufacturer": {
+      "command": "getprop ro.product.manufacturer",
+      "file": "getprop-manufacturer.txt",
+      "status": "ok"
+    },
+    "getprop-android": {
+      "command": "getprop ro.build.version.release",
+      "file": "getprop-android.txt",
+      "status": "ok"
+    },
+    "getprop-sdk": {
+      "command": "getprop ro.build.version.sdk",
+      "file": "getprop-sdk.txt",
+      "status": "ok"
+    },
+    "getprop-characteristics": {
+      "command": "getprop ro.build.characteristics",
+      "file": "getprop-characteristics.txt",
+      "status": "ok"
+    },
+    "getprop-locale": {
+      "command": "getprop persist.sys.locale",
+      "file": "getprop-locale.txt",
+      "status": "ok"
+    },
+    "getprop-timezone": {
+      "command": "getprop persist.sys.timezone",
+      "file": "getprop-timezone.txt",
+      "status": "ok"
+    },
+    "uname": {
+      "command": "uname -m",
+      "file": "uname.txt",
+      "status": "ok"
+    },
+    "termux-api-installed": {
+      "command": "for c in termux-battery-status termux-wifi-connectioninfo termux-telephony-deviceinfo termux-telephony-cellinfo termux-sensor termux-camera-info termux-microphone-record termux-location termux-notification termux-clipboard-get termux-volume termux-tts-speak termux-torch termux-vibrate termux-wake-lock; do command -v \"$c\" || echo \"MISSING $c\"; done",
+      "file": "termux-api-installed.txt",
+      "status": "ok"
+    },
+    "battery-status": {
+      "command": "termux-battery-status",
+      "file": "battery-status.json",
+      "status": "ok"
+    },
+    "wifi-connectioninfo": {
+      "command": "termux-wifi-connectioninfo",
+      "file": "wifi-connectioninfo.json",
+      "status": "ok"
+    },
+    "wifi-scaninfo": {
+      "command": "termux-wifi-scaninfo",
+      "file": "wifi-scaninfo.json",
+      "status": "ok"
+    },
+    "telephony-deviceinfo": {
+      "command": "termux-telephony-deviceinfo",
+      "file": "telephony-deviceinfo.json",
+      "status": "ok"
+    },
+    "telephony-cellinfo": {
+      "command": "termux-telephony-cellinfo",
+      "file": "telephony-cellinfo.json",
+      "status": "ok"
+    },
+    "sensor-list": {
+      "command": "termux-sensor -l",
+      "file": "sensor-list.json",
+      "status": "ok"
+    },
+    "camera-info": {
+      "command": "termux-camera-info",
+      "file": "camera-info.json",
+      "status": "ok"
+    },
+    "tts-engines": {
+      "command": "termux-tts-engines",
+      "file": "tts-engines.json",
+      "status": "ok"
+    },
+    "volume": {
+      "command": "termux-volume",
+      "file": "volume.json",
+      "status": "ok"
+    },
+    "notification-list": {
+      "command": "termux-notification-list",
+      "file": "notification-list.txt",
+      "status": "unparsed"
+    },
+    "usb-list": {
+      "command": "termux-usb -l",
+      "file": "usb-list.json",
+      "status": "ok"
+    },
+    "infrared-frequencies": {
+      "command": "termux-infrared-frequencies",
+      "file": "infrared-frequencies.json",
+      "status": "ok"
+    },
+    "storage-shared": {
+      "command": "test -d \"$HOME/storage/shared\" && echo present || echo absent",
+      "file": "storage-shared.txt",
+      "status": "ok"
+    },
+    "proc-meminfo": {
+      "command": "head -5 /proc/meminfo",
+      "file": "proc-meminfo.txt",
+      "status": "ok"
+    },
+    "thermal-zones": {
+      "command": "for z in /sys/class/thermal/thermal_zone*; do echo \"$(cat $z/type)=$(cat $z/temp)\"; done",
+      "file": "thermal-zones.txt",
+      "status": "ok"
+    },
+    "cpu-freq": {
+      "command": "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq",
+      "file": "cpu-freq.txt",
+      "status": "ok"
+    }
+  },
+  "failed_or_empty": [
+    "notification-list"
+  ]
+}

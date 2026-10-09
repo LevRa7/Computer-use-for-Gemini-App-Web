@@ -82,6 +82,15 @@ def test_tools_surface_contains_all_tools():
         # Self-update, added before the share surface so the pre-existing order of
         # the fifteen tools above is untouched.
         "mesh_update",
+        # The device branch (the node's own phone or laptop), added in the same
+        # slot and for the same reason: after everything that existed when it
+        # landed and before the share block, so neither the legacy surface nor the
+        # shares had to move. Self-update and the device tools are both newer than
+        # the shares' slot, which is why they sit here rather than at the end.
+        "device_info",
+        "device_control",
+        "device_capture",
+        "device_messages",
         # Public shares, last so the pre-existing surface keeps its order. The
         # deployed gateway advertises the same four names; the internal relay
         # ("_http_share") is deliberately not part of TOOLS.
@@ -93,6 +102,35 @@ def test_tools_surface_contains_all_tools():
     for spec in mcp_tools.TOOLS:
         assert spec["description"]
         assert spec["inputSchema"]["type"] == "object"
+
+
+def test_every_advertised_tool_is_dispatchable_and_wired_once():
+    """``tools/list`` must not offer a call that ``call_tool`` cannot answer.
+
+    A name that is listed in ``TOOLS`` but missing from ``_HANDLERS`` is the
+    classic wiring bug: the model sees the tool, calls it, and gets "Unknown
+    tool" - which reads as a broken node rather than a missing feature. The same
+    table must not send two names to one handler either: a copy-pasted dispatch
+    line (``device_messages`` pointing at the capture handler, say) stays
+    invisible until the wrong thing happens on a real phone. Both checks read the
+    module's own tables, so a new tool is covered the moment it is registered.
+    """
+    names = [tool["name"] for tool in mcp_tools.TOOLS]
+
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicates, "advertised more than once: %s" % duplicates
+
+    undispatchable = [name for name in names if name not in mcp_tools._HANDLERS]
+    assert not undispatchable, (
+        "advertised in TOOLS but missing from _HANDLERS: %s" % undispatchable)
+
+    by_handler = {}
+    for name in names:
+        handler = mcp_tools._HANDLERS[name]
+        first = by_handler.setdefault(handler, name)
+        assert first == name, (
+            "%s and %s are dispatched to the same handler (%s)"
+            % (first, name, getattr(handler, "__name__", handler)))
 
 
 def test_call_tool_never_raises_on_bad_input():
