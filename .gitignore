@@ -14,6 +14,15 @@ win11_screen.png
 .state/
 registry.json
 *.tar.gz
+# Live tokens belong in environment files, and the gateway deployment writes one
+# next to gateway.py - see the note further down.
+.env
+*.env
+# A scratch copy of the whole tree and local history bundles are not part of the
+# published project - the copy is what once committed token.json and
+# webhook_secret.txt behind the ignore rules above.
+.22/
+*.bundle
 # gateway.py is the deployed cloud gateway source (also mirrored to the VPS).
 # It is tracked on purpose: without it the published repo cannot run a gateway.
 # Never commit registry.json or *.env next to it - those hold live tokens.

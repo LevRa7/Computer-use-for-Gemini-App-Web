@@ -883,8 +883,8 @@ if [ ! -f "$SCRIPT_DIR/core/agent.py" ]; then
     # tests/test_installer_bootstrap.py fails when a core module is missing here.
     for f in core/__init__.py core/agent.py core/agent_harness.py core/code_cache.py \
              core/device.py core/domain.py core/hooks.py core/mcp_tools.py core/policies.py \
-             core/schemas.py core/server.py core/subagents.py core/termux.py core/triggers.py \
-             core/updater.py core/version.py core/vitals.py core/web_share.py \
+             core/redact.py core/schemas.py core/server.py core/subagents.py core/termux.py \
+             core/triggers.py core/updater.py core/version.py core/vitals.py core/web_share.py \
              skills/orchestrator.md; do
         bootstrap_tmp="$BOOTSTRAP_DIR/${f}.part"
         if curl -fsSL "https://${GATEWAY}/${f}" -o "$bootstrap_tmp" 2>/dev/null \

@@ -169,3 +169,21 @@ jobs:
           name: setup-exe
           path: dist/AntigravityMesh-Setup-*
           if-no-files-found: error
+
+  # This repository is public, so a credential that reaches it is a published
+  # credential: the scan is a hard gate, not a warning. The full history is
+  # fetched because a secret that was committed and then deleted stays readable
+  # from the old commit - which is exactly how the mesh once leaked an SSH
+  # password through task_metrics.json. The default ruleset covers the whole tree
+  # and the whole history as it is, with no repository-specific allowlist.
+  secret-scan:
+    name: gitleaks (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

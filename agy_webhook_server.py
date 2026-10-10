@@ -20,6 +20,10 @@ from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import subagent_dispatcher
 
+# webhook_history.json is written next to the code and is tracked by git, so the
+# command strings and outputs it stores are redacted before they are persisted.
+from core.redact import redact_entry
+
 PORT = int(os.environ.get("AGY_WEBHOOK_PORT", 8095))
 HOST = os.environ.get("AGY_WEBHOOK_HOST", "127.0.0.1")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -118,6 +122,9 @@ def record_successful_attempt(client_ip: str):
             del failed_attempts[client_ip]
 
 def record_history(entry: dict):
+    # The entry carries the command that was run and its output; strip any
+    # credential-shaped span before either the in-memory store or the file sees it.
+    entry = redact_entry(entry)
     with tasks_lock:
         history_store.insert(0, entry)
         if len(history_store) > MAX_HISTORY:

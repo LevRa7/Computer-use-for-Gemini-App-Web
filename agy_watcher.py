@@ -29,6 +29,10 @@ from gdrive_client import GDriveClient, DEFAULT_FILE_ID, GEMINI_REMOTE_FOLDER_ID
 # instead of this module reading AGY_PUBLIC_BASE_URL on its own.
 from core import domain
 
+# Telemetry is persisted next to the code and has been committed before, so a
+# credential that arrives inside a command string must never reach the file.
+from core.redact import redact_entry
+
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "agy_watcher.log"
 METRICS_FILE = BASE_DIR / "task_metrics.json"
@@ -57,6 +61,10 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def record_task_metrics(metric: dict):
     """Saves granular execution timing and command details to log and JSON metrics."""
+    # Commands arrive from the caller verbatim - a remote dispatch is usually
+    # "sshpass -p '<password>' ssh ..." - so both the human-readable log and
+    # task_metrics.json get the redacted copy and never the credential itself.
+    metric = redact_entry(metric)
     try:
         cmds_str = "\n".join(
             f"    {i+1}. [rc={c.get('exit_code', 0)}] ({c.get('duration_seconds', 0)}s): {c.get('command')}"
